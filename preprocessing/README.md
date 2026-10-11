@@ -15,3 +15,7 @@ PYTHONPATH="$PWD:$PWD/src:$PWD/.deps" python -m preprocessing.genotypes --config
 `phenotypes.py` 的 `protein_study` 解析 GRIN 描述符 51016 的逐 Study 材料表，验证上下文、列名、行结构及材料身份，保留官方 VALUE、观测说明和库存文本；原始解析不聚合、不填补；`aggregate_studies` 仅在授权的划分前来源重建中按配置作先 Study 内、再 Study 间等权均值，不能在冻结后重放全量读取。方法身份由 `method_document` 核验。来源完整性与观测选择合同尚未通过时，原始记录不能作为开发表型入口。
 
 `regions.py` 从记录完整的源窗口及两组装 SAM 比对结果验收完整零编辑匹配、原位回映射、次要比对歧义、同染色体及独立 FASTA 序列一致性。按 1-based SNP 对 0-based 半开窗口求交，再以配置固定哈希选择不重叠多 SNP 窗。正式面板是完整源中心 600 bp 窗口的参考转移，不在目标参考重新取中点；参数和映射版本只维护在唯一配置。
+
+`splits.py` 用全目录原始调用的一致性构建近重复连通组，覆盖不足的候选对保守连接；不做全队列频率筛选或填补。整组封存、平衡外层折及整组哈希前缀预算／内层折由配置固定，已有正式清单不覆盖。开发标签及无值偏移索引在冻结前隔离导出，冻结后仅通过 `io.load_development_phenotypes` 读取许可开发行。源全量表型及隔离封存标签不再读取。
+
+`regions.audit_window_calls` 在实际训练 ID 上审计原始调用有效性、缺失、多未定相杂合、训练 QC 与多态性，不读取表型、不生成填补序列、不补选窗口。调用有效、至少两个 QC SNP 与至少两个多态 SNP 的窗数分别报告；教师可分辨信号另行验收。

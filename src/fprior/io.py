@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
 import tomllib
 import numpy as np
 
@@ -32,9 +34,10 @@ def validate_inputs(config: dict, root: Path) -> dict:
         return {'status': 'TARGET_UNSPECIFIED', 'issues': ['primary_trait_id'],
                 'phenotypes_accessed': False, 'data_ready': False}
     file_fields = {
-        'data': ['directory', 'source_manifest', 'raw_calls', 'sealed_partition_tsv'],
+        'data': ['directory', 'source_manifest', 'raw_calls', 'sealed_partition_tsv',
+                 'partition_manifest'],
         'regions': ['fasta', 'bed'], 'teacher': ['manifest'],
-        'evaluation': ['outer_split_file'],
+        'evaluation': ['outer_split_file', 'inner_split_file'],
     }
     issues = []
     for section, fields in file_fields.items():
@@ -73,3 +76,52 @@ def assert_development_only(sample_ids: list[str], sealed_ids: frozenset[str]) -
 def assert_order(observed: list[str], expected: list[str], kind: str) -> None:
     if observed != expected or len(set(observed)) != len(observed):
         raise ValueError(f'{kind}_ORDER_MISMATCH')
+
+
+def load_development_phenotypes(manifest_path: Path, sample_ids: list[str]) -> np.ndarray:
+    """Validate permission metadata first, then seek only requested development rows.
+
+    This interface never opens raw phenotype sources or the sealed-value artifact.
+    The authenticated index contains IDs and byte offsets, without phenotype values.
+    Per-row hashes and identity checks reject stale, reordered or modified data.
+    """
+    path = Path(manifest_path).resolve()
+    manifest = json.loads(path.read_text())
+    if manifest.get('status') != 'FROZEN' or manifest.get('schema_version') != 1:
+        raise ValueError('PARTITION_NOT_FROZEN')
+    directory = path.parent
+
+    def artifact(name):
+        record = manifest['development_interface'][name]
+        target = (directory / record['file']).resolve()
+        if target.parent != directory:
+            raise ValueError('DEVELOPMENT_ARTIFACT_PATH_INVALID')
+        return target, record
+
+    sealed_path, sealed_record = artifact('sealed_ids')
+    sealed_bytes = sealed_path.read_bytes()
+    if hashlib.sha256(sealed_bytes).hexdigest() != sealed_record['sha256']:
+        raise ValueError('SEALED_ID_MANIFEST_MISMATCH')
+    sealed = frozenset(sealed_bytes.decode().splitlines())
+    assert_development_only(sample_ids, sealed)
+    index_path, index_record = artifact('index')
+    index_bytes = index_path.read_bytes()
+    if hashlib.sha256(index_bytes).hexdigest() != index_record['sha256']:
+        raise ValueError('DEVELOPMENT_INDEX_MISMATCH')
+    index = json.loads(index_bytes)
+    if set(index) & sealed or not set(sample_ids) <= set(index):
+        raise ValueError('DEVELOPMENT_ID_NOT_PERMITTED')
+    labels_path, _ = artifact('labels')
+    result = []
+    with labels_path.open('rb') as stream:
+        for identity in sample_ids:
+            entry = index[identity]
+            stream.seek(entry['offset'])
+            row = stream.read(entry['length'])
+            if hashlib.sha256(row).hexdigest() != entry['sha256']:
+                raise ValueError('DEVELOPMENT_LABEL_ROW_MISMATCH')
+            observed, value = row.decode().rstrip('\n').split('\t')
+            if observed != identity:
+                raise ValueError('DEVELOPMENT_LABEL_ID_MISMATCH')
+            result.append(float(value))
+    return finite_array(result, 1, 'development_phenotypes')

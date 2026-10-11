@@ -38,3 +38,15 @@ def test_panel_order_and_overlap():
     ordered = sorted(chosen, key=lambda row:row['start'])
     assert all(a['end'] <= b['start'] for a,b in zip(ordered, ordered[1:]))
     assert select_panel([dict(rows[0], catalog_snps=1)], 2, 20, 1) == []
+def test_train_window_validity_excludes_missing_and_multiple_unphased_hets():
+    import numpy as np
+    from preprocessing.regions import audit_window_calls
+    x = np.array([[0, 2], [1, 0], [1, 1], [np.nan, 2], [2, 2]])
+    records = audit_window_calls(x, {'w': [0, 1]}, [0, 1, 2, 3], .95, .98)
+    r = records[0]
+    assert r['valid_samples'] == 2 and r['valid_fraction'] == .5
+    assert r['missing_samples'] == 1 and r['unresolved_multihet_samples'] == 1
+    assert r['qc_snps'] == 1 and not r['passes_valid_fraction']
+    # Test rows have no effect on training-derived diagnostics.
+    x[4] = [np.nan, np.nan]
+    assert audit_window_calls(x, {'w': [0, 1]}, [0, 1, 2, 3], .95, .98) == records

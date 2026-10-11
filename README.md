@@ -12,7 +12,7 @@
 | `data/paper_soybase/` | 已拉取的论文配套源码、数据及产物 | 本地保留，作为来源材料 |
 | `data/results_soybase/` | 既有结果文件 | 本地保留，不作为本轮结果 |
 | `docs/` | 研究方案、验收规范、讲义和配图 | 保留，纳入版本管理 |
-| `src/fprior/` | 数学核心、输入预检及尚未实现的教师／评价接口 | 纳入版本管理 |
+| `src/fprior/` | 数学核心、输入预检、真实教师及尚未完成的评价接口 | 纳入版本管理 |
 | `configs/funcprior.toml` | 唯一实验参数与输入预检配置 | 纳入版本管理 |
 | `pyproject.toml` | Python 包定义 | 纳入版本管理 |
 
@@ -29,9 +29,9 @@
 
 ## 代码
 
-已实现 `io` 的元数据预检、ID 封存排除和顺序断言，`features` 的可信单倍型重建及 D/A/U/R 分解，`kernels` 的线性、对角、RBF、局部及已对齐单倍型计数核，`solver` 的有限单纯形、多核岭和并列选择。所有拟合统计量由调用方提供当前训练分区；单倍型类别目录构建、真实窗口筛选与端到端分区编排尚未实现。仅关闭精确零核，真实教师噪声阈值须在教师验证阶段确定。
+已实现 `io` 的元数据预检、ID 封存排除和顺序断言，`features` 的可信单倍型重建及 D/A/U/R 分解，`kernels` 的线性、对角、RBF、局部及已对齐单倍型计数核，`solver` 的有限单纯形、多核岭和并列选择。所有拟合统计量由调用方提供当前训练分区；单倍型类别目录构建、真实窗口筛选与端到端分区编排尚未实现。真实教师噪声已实测，功能块可分辨性按当前教师 manifest 与验收规范阈值判断。
 
-`teacher` 的真实加载、`baselines` 的实验选参和 `eval` 的完整评价仍为占位。尚无真实训练入口，不将上述数学函数视为完整流水线。
+`teacher` 已实现本地资产哈希校验、冻结 PlantCAD2/LoRA 与分类头恢复、原始 logits 和按版本／序列缓存；每条序列采用固定模型微批次 1，避免批次形状引起 float32 漂移。`baselines` 的实验选参和 `eval` 的完整评价仍为占位。尚无真实训练入口，不将上述数学函数视为完整流水线。
 
 配置：[configs/funcprior.toml](configs/funcprior.toml)。路径相对项目根目录解析；数值容差也从该配置读取。元数据预检只检查合同字段与文件存在性，不读取基因型或表型内容：
 
@@ -66,7 +66,7 @@ export PYTHONPATH="$PWD/src:$PWD/.deps${PYTHONPATH:+:$PYTHONPATH}"
 
 教师的 Transformers／PEFT 接口版本参考 [PlantCAD 官方依赖](https://github.com/plantcad/plantcad/blob/main/requirements.txt)。Mamba 选择覆盖 PlantCAD Mamba2 接口的 2.x 版本，避免引入当前未使用的 Mamba3 依赖。扩展源码只调整为 C++20 和 sm_86 编译，并补齐本地 CUDA 编译目录的 `libcudart.so` 链接名；模型和内核数学代码保持原样。源码版本由 `teacher` extra 锁定，编译组件由 `cuda-build` extra 锁定。
 
-编译 wheel、源码 commit、补丁、构建日志和 GPU 数值测试结果存放在本项目 `runs/environment_build/`，不入 Git。迁移机器时须按该 manifest 核对 Python、Torch、CUDA、C++ ABI 与 GPU 架构，重新构建；本机源码编译使用 `--no-build-isolation --no-deps`，复用已有 CUDA 版 PyTorch。固定权重 revision 和教师 manifest 仍待落实，扩展就绪不等于真实 PlantCAD 教师已验收。
+编译 wheel、源码 commit、补丁、构建日志和 GPU 数值测试结果存放在本项目 `runs/environment_build/`，不入 Git。迁移机器时须按该 manifest 核对 Python、Torch、CUDA、C++ ABI 与 GPU 架构，重新构建；本机源码编译使用 `--no-build-isolation --no-deps`，复用已有 CUDA 版 PyTorch。基础模型及适配器不可变 revision、官方 LFS SHA256、标签方向与教师 manifest 已落实；实际 156 序列及 64 序列改变顺序／外部批次的重复推理通过，见任务书。
 
 GPU 检查使用合成输入，包括卷积与选择性扫描的参考实现对照，以及 600 bp 长度 Mamba2 融合／非融合路径的前向、反向一致性：
 
@@ -78,6 +78,6 @@ python -m pytest -q tests/test_cuda_extensions.py
 
 ## 当前状态
 
-B 阶段第一批数学核心已通过合成单元验证，仍无完整真实训练入口。官方 VCF、markerMap、PIconversion 和匹配 FASTA 已下载并通过 MD5/gzip 校验，全部 REF 一致；全部官方 protein Study 来源及固定汇总已落实，待冻结队列为 17,526 个材料。正式种子 ACR 经验证映射和固定选择得到 35 个多 SNP 非重叠窗；目录覆盖通过，训练侧有效性尚未验收。标准输入与来源 manifest 在处理目录，事实统一见任务书。缺少新队列划分／严格隔离接口及冻结教师，真实训练继续停止。
+B 阶段第一批数学核心已通过合成单元验证，仍无完整真实训练入口。官方 VCF、markerMap、PIconversion 和匹配 FASTA 已下载并通过 MD5/gzip 校验，全部 REF 一致；全部官方 protein Study 来源及固定汇总已落实，已冻结队列为 17,526 个材料。正式种子 ACR 经验证映射和固定选择得到 35 个多 SNP 非重叠窗；目录覆盖及 160 个训练场景的调用有效性通过，真实教师 logits 与功能块信号已验收。标准输入与来源 manifest 在处理目录，事实统一见任务书。新队列分组、划分与严格隔离接口已冻结并验证；完整基线、嵌套实验编排与合成功效验收尚未完成，真实性状比较继续停止。
 
-新官方队列须冻结独立版本的开发／封存与组约束嵌套划分，旧 BiMSGP 折号及父项目划分保持稳定且不作为本版输入。新封存清单当前未冻结，不能默认为无封存；开发十折服务开发集，最终封存评价须达到预注册门槛后另行申请。执行合同见[任务书](docs/任务书.md)。此前通过的 GPU 检查不因本次数据获取而重复运行。
+新官方队列须冻结独立版本的开发／封存与组约束嵌套划分，旧 BiMSGP 折号及父项目划分保持稳定且不作为本版输入。已冻结开发 14,020、封存 3,506 个材料，开发十折各 1,402 个材料；开发十折服务开发集，最终封存评价须达到预注册门槛后另行申请。执行合同见[任务书](docs/任务书.md)。此前通过的 GPU 检查不因本次数据获取而重复运行。

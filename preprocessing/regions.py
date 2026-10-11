@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 import csv
 import hashlib
 from pathlib import Path
+import numpy as np
 
 
 def exact_hits(path: Path, length: int):
@@ -103,3 +104,58 @@ def select_panel(candidates, min_snps: int, max_windows: int, seed: int):
         if len(selected) == max_windows:
             break
     return selected
+
+
+def audit_window_calls(dosages, windows, training_indices, min_valid_fraction,
+                       min_train_call_rate, *, phased=None):
+    """Audit frozen windows on this training partition, without imputation or labels.
+
+    Frequency and QC diagnostics use training rows only. Catalog-valid windows,
+    windows retaining multiple QC SNPs, and polymorphic windows are distinct
+    diagnostics; monomorphic SNPs are not removed by this audit.
+    """
+    values = np.asarray(dosages)
+    train = np.asarray(training_indices)
+    if (values.ndim != 2 or train.ndim != 1 or train.dtype.kind not in 'iu'
+            or not len(train) or len(np.unique(train)) != len(train)
+            or (train < 0).any() or (train >= len(values)).any()):
+        raise ValueError('WINDOW_TRAINING_INDICES_INVALID')
+    if not 0 < min_valid_fraction <= 1 or not 0 < min_train_call_rate <= 1:
+        raise ValueError('WINDOW_VALIDITY_POLICY_INVALID')
+    if phased is not None and (np.asarray(phased).shape != values.shape
+                               or np.asarray(phased).dtype != np.bool_):
+        raise ValueError('WINDOW_PHASE_MASK_INVALID')
+    records = []
+    for identity, columns in windows.items():
+        if len(set(columns)) != len(columns) or len(columns) < 2:
+            raise ValueError('WINDOW_CATALOG_SNP_MAPPING_INVALID')
+        calls = values[np.ix_(train, columns)]
+        called = np.isfinite(calls)
+        if np.isinf(calls).any() or not np.isin(calls[called], [0, 1, 2]).all():
+            raise ValueError('WINDOW_DOSAGE_INVALID')
+        complete = called.all(axis=1)
+        heterozygotes = (calls == 1).sum(axis=1)
+        fully_phased = (np.asarray(phased)[np.ix_(train, columns)].all(axis=1)
+                        if phased is not None else np.zeros(len(train), dtype=bool))
+        valid = complete & ((heterozygotes <= 1) | fully_phased)
+        qc = called.mean(axis=0) >= min_train_call_rate
+        polymorphic = [len(np.unique(calls[:, j][called[:, j]])) > 1
+                       for j in range(len(columns))]
+        # Count unordered allele-pair classes only when the haplotype pair is unique.
+        haplotypes = set()
+        for row in calls[valid]:
+            if np.count_nonzero(row == 1) > 1:
+                # Phase allele orientation is not available in this call-only audit.
+                continue
+            haplotypes.add(tuple((row >= 1).astype(int)))
+            haplotypes.add(tuple((row == 2).astype(int)))
+        records.append(dict(region_id=identity, training_samples=len(train),
+                            catalog_snps=len(columns), qc_snps=int(qc.sum()),
+                            polymorphic_qc_snps=int(np.sum(qc & polymorphic)),
+                            missing_samples=int((~complete).sum()),
+                            unresolved_multihet_samples=int((complete & (heterozygotes > 1)
+                                                               & ~fully_phased).sum()),
+                            valid_samples=int(valid.sum()), valid_fraction=float(valid.mean()),
+                            passes_valid_fraction=bool(valid.mean() >= min_valid_fraction),
+                            observed_unphased_resolvable_haplotypes=len(haplotypes)))
+    return records

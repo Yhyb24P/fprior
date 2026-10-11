@@ -19,9 +19,10 @@ source_manifest = "preprocessing/processed/soybase_official_v2/source_manifest.j
 raw_calls = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
 reference_build = "Wm82.gnm2.DTC4"     # 官方 README、FASTA 与 VCF REF 已核验
 genotype_encoding = "VCF_GT_ALT_dosage_0_1_2_NaN"
-phenotype_unit = "% seed dry weight"  # GRIN 描述符；观测选择规则仍须核验
+phenotype_unit = "% seed dry weight"  # GRIN 描述符及固定 Study 汇总已核验
 # 新官方队列须冻结独立开发／封存划分；旧材料及其划分保留，不继承父项目划分。
-sealed_partition_tsv = ""             # REQUIRED;新版本清单尚未冻结，不得用空清单替代
+sealed_partition_tsv = "preprocessing/processed/soybase_official_v2/splits.tsv"
+partition_manifest = "preprocessing/processed/soybase_official_v2/partition_manifest.json"
 
 [data.protein]
 source_studies_manifest = "data/soybase/raw/phenotype/grin_protein_studies_manifest.json"
@@ -46,12 +47,14 @@ training_monomorphic = "retain_zero_training_column"
 [teacher]
 # 单一跨物种候选，不代表已在大豆完成接口验证；不得按预测分数换教师。
 model = "plantcad/cross_species_acr_train_on_arabidopsis_plantcad2_small"
-revision = ""                        # REQUIRED;未落实则停止功能分支
+revision = "a76b001f89a3be2e12990158bb1903ccddd17625"
 output = "logit_positive_minus_logit_negative"
 sequence_length = 600
 frozen = true
 precision_reference = "float32"
-manifest = ""                        # teacher_manifest.json 路径,缺省不加载真实教师
+inference_version = "plantcad2_float32_canonical_batch1_v1"
+inference_batch_size = 1              # 固定模型微批次，避免不同角色／批次产生 FP32 漂移
+manifest = "preprocessing/processed/soybase_official_v2/teacher_manifest.json"
 
 [regions]
 max_windows = 256
@@ -85,15 +88,30 @@ selection_relative_tolerance = 1.0e-10
 feature_identity_relative_tolerance = 1.0e-8
 
 [evaluation]
-outer_split = "new_official_cohort_group_constrained" # 待建立并冻结
-outer_split_file = ""                 # REQUIRED;不得沿用旧 BiMSGP 队列折号
+outer_split = "new_official_cohort_group_constrained"
+outer_split_file = "preprocessing/processed/soybase_official_v2/splits.tsv"
+inner_split_file = "preprocessing/processed/soybase_official_v2/nested_splits.tsv"
 outer_folds = 10
-inner_split = "group_constrained_within_outer_train" # 待实现及冻结；旧版本划分保持稳定
+inner_split = "group_constrained_within_outer_train_budget" # 已冻结；旧版本划分保持稳定
 inner_folds = 4
 primary_metric = "mse"
 practical_relative_mse_gain = 0.02
 min_consistent_outer_fraction = 0.80   # 十折对应至少八折同向；评价前固定
 descriptive_group_bootstrap_replicates = 2000
+
+[evaluation.partition]
+version = "official_protein_groups_v2"
+sealed_fraction = 0.20
+group_metric = "exact_ALT_dosage_concordance_on_jointly_called_catalog_SNVs"
+min_shared_call_fraction = 0.98
+min_concordance = 0.995
+group_connection = "transitive_connected_components"
+insufficient_shared_calls = "connect_unless_observed_discordances_exclude_full_catalog_near_duplicate"
+sealed_selection = "whole_group_hash_prefix_nearest_sample_fraction"
+fold_assignment = "descending_group_size_hash_ties_greedy_sample_balance"
+hash_namespace = "seed_TAB_sealed_or_outer_or_budget:outer_or_inner:outer:budget_TAB_group_id"
+group_device = "cuda"
+group_block_size = 512
 
 [learning_curve]
 # 每个外层训练分区内固定组哈希顺序、按整组取嵌套子集；预算为材料数上限。
