@@ -1,4 +1,4 @@
-# SoyBase 实验参数；正式预测仍须通过 Study 审计与合成功效验收。
+# SoyBase 实验参数；正式预测仍须通过 Study 观测核查与合成功效验收。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
 experiment_version = "soybase_official_funcprior_v4"
@@ -19,7 +19,7 @@ raw_calls = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.g
 reference_build = "Wm82.gnm2.DTC4"     # 官方 README、FASTA 与 VCF REF 已核验
 genotype_encoding = "VCF_GT_ALT_dosage_0_1_2_NaN"
 phenotype_unit = "% seed dry weight"  # GRIN 描述符及固定 Study 汇总已核验
-# 新官方队列须冻结独立开发／封存划分；旧材料及其划分保留，不继承父项目划分。
+# 新官方队列须确定独立开发／封存划分；旧材料及其划分保留，不继承父项目划分。
 sealed_partition_tsv = "preprocessing/processed/soybase_official_v2/splits.tsv"
 partition_manifest = "preprocessing/processed/soybase_official_v2/partition_manifest.json"
 
@@ -35,7 +35,7 @@ transform = "none"
 
 [variant_policy]
 kind = "biallelic_snv"
-contig_policy = "glyma.Wm82.gnm2.Gm01_to_Gm20_only" # 冻结核染色体目录，排除 scaffold 与 mtDNA
+contig_policy = "glyma.Wm82.gnm2.Gm01_to_Gm20_only" # 固定核染色体目录，排除 scaffold 与 mtDNA
 min_train_call_rate = 0.98
 maf_min = 0.0
 center = "training_mean"
@@ -91,7 +91,7 @@ outer_split = "new_official_cohort_group_constrained"
 outer_split_file = "preprocessing/processed/soybase_official_v2/splits.tsv"
 inner_split_file = "preprocessing/processed/soybase_official_v2/nested_splits.tsv"
 outer_folds = 10
-inner_split = "group_constrained_within_outer_train_budget" # 已冻结；旧版本划分保持稳定
+inner_split = "group_constrained_within_outer_train_budget" # 已确定；旧版本划分保持稳定
 inner_folds = 4
 primary_metric = "mse"
 practical_relative_mse_gain = 0.02
@@ -152,7 +152,7 @@ primary_budget_only = true
 [execution]
 blas_threads = 4
 profile_outer_fold = 0              # 真实主预算、四内折及一次外层；响应为固定合成值
-# 正式评价必填：同一实验／划分版本的 P0 Study 审计及 P2 原 720 + 稀疏功效验收。
+# 正式评价必填：同一实验／划分版本的 P0 Study 观测核查及 P2 原 720 + 稀疏功效验收。
 pretraining_acceptance = ""
 
 [budget]
@@ -160,3 +160,156 @@ profiling_unique_sequences = 64
 max_teacher_calls = 200000
 max_projected_teacher_gpu_hours = 24
 max_host_ram_fraction = 0.70
+
+# 补充协议只定义训练前要求；配置填写不代表已实现或验收通过。
+[pretraining]
+protocol_version = "soybase_v4_pretraining_v1"
+require_artifact_verification = true
+allow_source_unavailable_exploration = false
+allow_power_limited_exploration = false
+exploratory_authorization_record = ""
+
+[pretraining.study]
+retrieval = "USDA_GRIN_Global_by_allowed_accession_only"
+expected_development_accessions = 14020
+pilot_accessions = 20
+pilot_selection = "uniform_without_replacement_from_sorted_development_IDs"
+pilot_seed_rule = "SeedSequence_seed_20"
+whitelist_source = "partition_manifest_and_development_ID_list"
+record_fields = ["accession_id", "study_id", "value", "inventory", "method", "source", "source_hash"]
+require_source_version = true
+require_query_timestamp = true
+require_per_accession_outcome = true
+forbid_full_phenotype_sources = true
+regenerate_labels_or_partitions = false
+aggregation_rule_source = "data.protein"
+precision_rule = "half_unit_in_last_published_decimal_place"
+tolerance_rule = "sum_old_and_new_equal_study_propagated_rounding_bounds_plus_float64_roundoff"
+float64_roundoff_multiplier = 32
+require_old_and_new_precision_provenance = true
+precision_missing = "STOP_WITHOUT_AGGREGATION_ACCEPTANCE"
+source_drift_status = "SOURCE_VERSION_DRIFT"
+unavailable_status = "STUDY_AUDIT_UNAVAILABLE"
+
+[pretraining.synthetic_original]
+expected_datasets = 720
+mechanisms = ["S0", "S1", "S2", "S3", "S4", "S5"]
+require_actual_instance_records = true
+require_mechanism_coverage = true
+
+[pretraining.synthetic_sparse]
+expected_instances = 1200
+repeats_per_scenario = 200
+repeat_first = 0
+repeat_last = 199
+expected_development_accessions = 14020
+expected_catalog_snps = 41346
+expected_two_snp_windows = 31
+expected_three_snp_windows = 4
+training_budget_source = "learning_curve.primary_training_sample_budget"
+outer_and_inner_splits_source = "evaluation"
+response = "synthetic_only_no_protein_reads"
+seed_rule = "SeedSequence_seed_scenario_id_repeat_id"
+require_actual_instance_records = true
+require_ten_folds_per_instance = true
+count_folds_as_repeats = false
+pilot_instances = 12
+pilot_selection = "each_scenario_repeat_0_and_1"
+pilot_purpose = "memory_numerical_equivalence_and_cost_only"
+reuse_response_independent_designs = true
+require_reuse_equivalence = true
+
+[pretraining.synthetic_sparse.generator]
+# 以下细则在任何合成结果产生前确定，不通过试测选择生成机制。
+additive_catalog = "all_41346_fixed_catalog_SNVs"
+additive_effect_distribution = "independent_Normal_0_1_over_M_variance"
+additive_effects_drawn_per_instance = true
+additive_missing = "development_population_variant_mean_generation_only"
+additive_completely_uncalled = "zero_generator_column_with_explicit_record"
+additive_center = "development_population_mean_generation_only"
+additive_signal_variance = 1.0
+signal_variance_ddof = 0
+functional_coefficients = "existing_teacher_coefficients_and_raw_call_validity_masks"
+functional_center = "development_population_mean_generation_only"
+theta_distribution = "independent_Normal_0_1_over_G_variance"
+gamma_distribution = "independent_Normal_0_1_over_G_variance"
+functional_signal_variance = 1.0
+reweight_windows_to_equal_variance = false
+orthogonalize_functional_signal_against_genotypes = false
+rp5_permutation_strata_source = "controls.residual_weight_permutation_strata"
+child_stream_order = ["additive_effects", "theta_or_gamma", "RP5_permutation", "noise"]
+noise_distribution = "independent_Normal_0_1"
+coefficient_rule = "sqrt_delta_over_1_minus_delta"
+oracle_reference = "known_f_A_without_h"
+oracle_full = "known_f_A_plus_c_delta_h"
+zero_signal_status = "NO_RESOLVABLE_SIGNAL"
+record_actual_signal_variance = true
+record_top_three_window_contributions = true
+
+[pretraining.synthetic_sparse.detection]
+# 与正式继续研究条件相同；不能使用更宽松的合成专用判据。
+gain_and_direction_source = "evaluation"
+additive_reference = "inner_selected_M0_or_EN"
+first_order_model = "M1"
+first_order_controls = ["MD", "MP"]
+residual_model = "M2"
+residual_controls = ["M1", "MU", "MW", "MWG", "MHap", "MLocal", "MI", "MRPerm"]
+matched_control_rule = "strictly_lower_pooled_MSE_than_each_registered_control_repeat"
+require_complete_comparisons = true
+require_complete_coverage_consistency = true
+require_reference_anchor_consistency = true
+require_search_budget_consistency = true
+n0_event = "first_order_or_residual_full_continuation_event"
+rate_denominator = "all_200_preregistered_instances_no_failure_exclusion"
+failed_instance = "not_detected_and_technical_failure_recorded"
+rp5_event = "residual_continuation_event_reported_as_wrong_teacher_attribution"
+
+[pretraining.synthetic_sparse.acceptance]
+null_trigger_rate_max = 0.10
+positive_control_detection_rate_min = 0.80
+target_detection_rate_min = 0.80
+wilson_confidence = 0.95
+wilson_z = 1.959963984540054
+technical_status_field = "technical_status"
+power_status_field = "power_status"
+low_power_component_status = "LOW_POWER"
+limited_power_status = "POWER_LIMITED"
+require_all_instances_and_folds_complete = true
+require_existing_numerical_tolerances = true
+require_hashes_predictions_and_source_versions = true
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "N0"
+scenario_id = 0
+signal = "none"
+oracle_gain = 0.0
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "F2"
+scenario_id = 1
+signal = "Z_theta"
+oracle_gain = 0.02
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "F5"
+scenario_id = 2
+signal = "Z_theta"
+oracle_gain = 0.05
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "R2"
+scenario_id = 3
+signal = "R_gamma"
+oracle_gain = 0.02
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "R5"
+scenario_id = 4
+signal = "R_gamma"
+oracle_gain = 0.05
+
+[[pretraining.synthetic_sparse.scenarios]]
+name = "RP5"
+scenario_id = 5
+signal = "SNP_count_stratified_permuted_teacher_residual_coefficients_times_gamma"
+oracle_gain = 0.05
