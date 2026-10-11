@@ -11,3 +11,5 @@ PYTHONPATH="$PWD:$PWD/src:$PWD/.deps" python -m preprocessing.genotypes --config
 `dosages.py` 的 `DosageTransform` 接收 **sample × variant** 剂量，每个实际内外层训练分区独立 `fit`，测试只使用该对象 `transform`。读取导出时先按冻结 ID 选择样本和位点并转置，再拟合训练统计量；不得先用全队列 QC 或均值处理。训练单态列保留，完全无调用列剔除。
 
 路径和数值参数只维护于 [configs/funcprior.toml](../configs/funcprior.toml)。产物在配置指定的 `preprocessing/processed/`，不入 Git。转换不读取表型，也不表示完整训练数据已就绪；protein 观测规则、新队列划分、隔离入口和 ACR 验收见[任务书](../docs/任务书.md)。
+
+`phenotypes.py` 的 `protein_study` 解析 GRIN 描述符 51016 的逐 Study 材料表，验证上下文、列名、行结构及材料身份，保留官方 VALUE、观测说明和库存文本；不聚合、不填补、不生成训练标签。来源完整性与观测选择合同尚未通过时，原始记录不能作为开发表型入口。
