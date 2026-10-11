@@ -1,5 +1,13 @@
 # 本项目预处理
 
-`dosages.py` 对已核实的 0/1/2 ALT 剂量与显式 NaN 缺失提供训练侧 QC、均值填补和中心化。每个实际内层／外层训练分区独立调用 `DosageTransform.fit`，测试只调用已拟合对象的 `transform`；阈值来自唯一实验配置。训练单态列保留，完全无调用列剔除。
+`genotypes.py` 从官方 Wm82.gnm2 VCF 导出核染色体双等位 SNV。样本、位点保留 VCF 顺序，数组为 **variant × sample**：`dosages.npy` 是 float32 ALT 剂量，任一等位缺失则 NaN；`alleles.npy` 保留两个调用（-1 表示缺失）；`phased.npy` 保留相位分隔符；`called.npy` 表示两等位均有调用。相位有效须同时满足 phased 与 called，未定相调用不能视为已知单倍型。`samples.tsv`、`variants.tsv` 对应数组轴，`gt_audit.json` 汇总包括被排除位点在内的全部原始 GT。导出拒绝覆盖已有正式产物，不进行频率筛选、填补或中心化。
 
-本模块不读取原始 SoyBase 的 1/2/3 类别，也不证明其调用语义。原始调用恢复、REF/ALT 与参考映射、来源 manifest 和开发表型导出尚未实现；缺少合同不能生成正式处理产物。未来产物统一写入配置指定的 `preprocessing/processed/`，原始 `data/` 保持稳定，产物不入 Git。
+在项目根目录、既有环境及 README 所述依赖路径下运行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/src:$PWD/.deps" python -m preprocessing.genotypes --config configs/funcprior.toml
+```
+
+`dosages.py` 的 `DosageTransform` 接收 **sample × variant** 剂量，每个实际内外层训练分区独立 `fit`，测试只使用该对象 `transform`。读取导出时先按冻结 ID 选择样本和位点并转置，再拟合训练统计量；不得先用全队列 QC 或均值处理。训练单态列保留，完全无调用列剔除。
+
+路径和数值参数只维护于 [configs/funcprior.toml](../configs/funcprior.toml)。产物在配置指定的 `preprocessing/processed/`，不入 Git。转换不读取表型，也不表示完整训练数据已就绪；protein 观测规则、新队列划分、隔离入口和 ACR 验收见[任务书](../docs/任务书.md)。

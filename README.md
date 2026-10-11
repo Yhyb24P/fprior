@@ -1,6 +1,6 @@
 # fprior：功能先验多核岭回归项目
 
-研究问题：参数固定的植物序列功能模型诱导的有符号、参考背景依赖的效应协方差，能否改善基因组预测？当前使用本地 SoyBase，以 `protein` 为主性状；[任务书](docs/任务书.md)定义大豆适配、执行顺序和验收条件。原拟南芥研究方案保留数学定义与解释边界，SoyBase 的真实输入适配与完整评价仍待实现。
+研究问题：参数固定的植物序列功能模型诱导的有符号、参考背景依赖的效应协方差，能否改善基因组预测？当前基于官方 SoySNP50K Wm82.gnm2 发布数据重建队列，以 `protein` 为主性状；[任务书](docs/任务书.md)定义大豆适配、执行顺序和验收条件。原拟南芥研究方案保留数学定义与解释边界，SoyBase 的真实输入适配与完整评价仍待实现。
 
 `fprior` 是从 `at_pheno` 衍生的独立研究项目，只复用已有 Conda 环境和通用仓库管理原则。数据处理、算法、配置与运行产物均由本项目独立维护，开发约定见 [AGENTS.md](AGENTS.md)。本目录建立独立 Git 仓库，主分支使用 `main`；GitHub 仓库为 [Yhyb24P/fprior](https://github.com/Yhyb24P/fprior)。目录在磁盘上仍嵌套于 `at_pheno`，独立仓库从本项目当前源码快照开始，不导入父仓库历史。父仓库既有历史和暂存内容保持原样。
 
@@ -16,9 +16,9 @@
 | `configs/funcprior.toml` | 唯一实验参数与输入预检配置 | 纳入版本管理 |
 | `pyproject.toml` | Python 包定义 | 纳入版本管理 |
 
-本地基因型与表型文件、已核实规模、主性状选择及来源缺口统一见[任务书 §二–三](docs/任务书.md)。原始 `1/2/3` 编码不能直接按 ALT 剂量使用；来源调用、缺失信息、参考映射及 protein 单位尚待落实。
+本版以官方 VCF 为唯一分型来源，旧 BiMSGP 矩阵及历史划分仅本地保留。下载文件、规模、protein 历史来源及尚待验收的观测规则统一见[任务书 §二–三](docs/任务书.md)。原始文件在 `data/soybase/raw/`；下载和完整性证据在 `runs/soybase_official_v2_acquisition/`，均不入 Git。
 
-数据处理代码统一放在本项目 `preprocessing/`，处理产物放在 `preprocessing/processed/`；算法只读取产物。新运行输出写入本项目 `runs/` 下独立目录，保留 `data/` 中既有文件的位置和内容。处理模块见 [preprocessing/README.md](preprocessing/README.md)；目前只实现已核实 ALT 剂量上的训练侧 QC 与填补，尚未生成真实处理产物。
+数据处理代码集中在 `preprocessing/`，产物在 `preprocessing/processed/soybase_official_v2/`，算法只读取通过验收的产物。GT 导出与训练侧转换见 [preprocessing/README.md](preprocessing/README.md)。新运行输出写入 `runs/` 下独立目录，不改写原始文件。
 
 ## 文档
 
@@ -78,8 +78,6 @@ python -m pytest -q tests/test_cuda_extensions.py
 
 ## 当前状态
 
-B 阶段已完成第一批数学核心及其合成单元验证，尚未完成全部阶段验收。当前输入预检返回 `MISSING_REQUIRED_INPUTS`；真实处理产物、来源 manifest、原始调用、参考版本、protein 单位、FASTA、ACR BED、教师 manifest／revision，以及既有发现／封存清单的 SoyBase 对应关系和严格隔离接口仍缺失或待核实，详见任务书。真实训练保持停止，`at_pheno` 封存表型继续禁止访问。
+B 阶段第一批数学核心已通过合成单元验证，仍无完整真实训练入口。官方 VCF、markerMap、PIconversion 和匹配 FASTA 已下载并通过 MD5/gzip 校验，全部 REF 一致；历史 protein 导出已取得。标准 GT 转换的实际完成状态以处理目录 `gt_audit.json` 为准。缺少 protein 观测规则、匹配 ACR、完整来源 manifest、新队列划分／严格隔离接口及冻结教师，真实训练继续停止。
 
-后续独立开发先补齐基线与指标、合成机制验收和成本测量；真实数据路线须完成 A/C/D 阶段合同后再进入主比较。此前通过的 GPU 验证本轮未重复运行。
-
-设计保留既有封存集，不另划、不默认为无封存；开发十折只服务发现集的组约束嵌套评价。父仓库配置与 ID 清单来源已定位，但跨物种适用性及隔离实现尚未验收；达到预注册门槛后须另行申请最终一次封存评价。来源与阻塞条件统一见[任务书 §3.2、§6.1](docs/任务书.md)。
+新官方队列须冻结独立版本的开发／封存与组约束嵌套划分，旧 BiMSGP 折号及父项目划分保持稳定且不作为本版输入。新封存清单当前未冻结，不能默认为无封存；开发十折服务开发集，最终封存评价须达到预注册门槛后另行申请。执行合同见[任务书](docs/任务书.md)。此前通过的 GPU 检查不因本次数据获取而重复运行。

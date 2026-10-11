@@ -2,7 +2,7 @@
 # 功能分支沿用原数学定义；参考、编码、教师 manifest 与分组审计完成前不得训练。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_funcprior_v1"
+experiment_version = "soybase_official_funcprior_v2"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -12,20 +12,20 @@ directory = "runs"                    # 本项目独立运行目录；不得写�
 
 [data]
 # 路径相对本目录(fprior/)
-source_genotypes = "data/soybase/geno-big.parquet"
-source_phenotypes = "data/soybase/pheno_selected.parquet"
-directory = "preprocessing/processed/soybase" # 计划产物目录，尚未生成
+source_genotypes = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
+source_phenotypes = "data/soybase/raw/phenotype/soybase_grin_protein_2015-08-26.tsv"
+directory = "preprocessing/processed/soybase_official_v2" # 官方 GT 标准化产物，非训练就绪声明
 source_manifest = ""                  # REQUIRED;原始调用、处理链与测量来源的可核验证据
-raw_calls = ""                        # 待定位，必要时恢复原始 GT、缺失和相位
-reference_build = ""                  # REQUIRED;不得从 Chr01 等列名猜参考版本
-genotype_encoding = ""                # REQUIRED;原始 1/2/3 与 REF/ALT 剂量的映射
-phenotype_unit = ""                   # REQUIRED;核实百分数、含水基准及聚合来源
-# 设计要求沿用既有发现／封存划分；父仓库来源已定位，SoyBase 对应关系和严格隔离接口尚未核实。
-sealed_partition_tsv = ""             # REQUIRED;待核实真实清单，不得另划、置空或视为无封存
+raw_calls = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
+reference_build = "Wm82.gnm2.DTC4"     # 官方 README、FASTA 与 VCF REF 已核验
+genotype_encoding = "VCF_GT_ALT_dosage_0_1_2_NaN"
+phenotype_unit = "% seed dry weight"  # GRIN 描述符；观测选择规则仍须核验
+# 新官方队列须冻结独立开发／封存划分；旧材料及其划分保留，不继承父项目划分。
+sealed_partition_tsv = ""             # REQUIRED;新版本清单尚未冻结，不得用空清单替代
 
 [variant_policy]
 kind = "biallelic_snv"
-contig_policy = "Chr01_to_Chr20_only" # 冻结核染色体目录，排除 scaffold 与 mtDNA
+contig_policy = "glyma.Wm82.gnm2.Gm01_to_Gm20_only" # 冻结核染色体目录，排除 scaffold 与 mtDNA
 min_train_call_rate = 0.98
 maf_min = 0.0
 center = "training_mean"
@@ -51,7 +51,7 @@ min_train_valid_fraction = 0.95
 sample_selection = "sha256_region_id_seed"
 min_catalog_snps = 2                  # 先按固定标记目录筛候选，再哈希选窗，不看标签或频率
 bed = ""                             # ACR BED 路径;未落实不以 GWAS 峰替代
-fasta = ""                           # 与 SoyBase 变异目录匹配的大豆 FASTA
+fasta = "data/soybase/raw/reference/glyma.Wm82.gnm2.DTC4.genome_main.fna"
 
 [solver]
 dtype = "float64"
@@ -63,10 +63,10 @@ selection_relative_tolerance = 1.0e-10
 feature_identity_relative_tolerance = 1.0e-8
 
 [evaluation]
-outer_split = "existing_soybase_trait_folds" # 随机外层，尚未通过近重复组审计
-outer_split_file = "data/soybase/folds/soybase_protein.csv"
+outer_split = "new_official_cohort_group_constrained" # 待建立并冻结
+outer_split_file = ""                 # REQUIRED;不得沿用旧 BiMSGP 队列折号
 outer_folds = 10
-inner_split = "group_constrained_within_outer_train" # 待实现及冻结，不改已有外层
+inner_split = "group_constrained_within_outer_train" # 待实现及冻结；旧版本划分保持稳定
 inner_folds = 4
 primary_metric = "mse"
 practical_relative_mse_gain = 0.02
