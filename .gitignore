@@ -1,0 +1,34 @@
+/data/
+/.deps/
+/preprocessing/processed/
+
+# Local experiment outputs and Python-generated files
+/runs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+/build/
+/dist/
+
+# Local environments, credentials and model/data artifacts
+/.venv/
+/.cache/
+.env
+.env.*
+!.env.example
+/credentials/
+/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.parquet
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.safetensors

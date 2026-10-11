@@ -1,0 +1,108 @@
+# SoyBase 实验参数与输入预检配置；缺少必填输入，不能运行真实训练。
+# 功能分支沿用原数学定义；参考、编码、教师 manifest 与分组审计完成前不得训练。
+# 所有相对路径均以 fprior/ 为基准。
+schema_version = 2
+experiment_version = "soybase_funcprior_v1"
+seed = 20261010
+# 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
+primary_trait_id = "protein"
+
+[output]
+directory = "runs"                    # 本项目独立运行目录；不得写入 at_pheno 的 runs/
+
+[data]
+# 路径相对本目录(fprior/)
+source_genotypes = "data/soybase/geno-big.parquet"
+source_phenotypes = "data/soybase/pheno_selected.parquet"
+directory = "preprocessing/processed/soybase" # 计划产物目录，尚未生成
+source_manifest = ""                  # REQUIRED;原始调用、处理链与测量来源的可核验证据
+raw_calls = ""                        # 待定位，必要时恢复原始 GT、缺失和相位
+reference_build = ""                  # REQUIRED;不得从 Chr01 等列名猜参考版本
+genotype_encoding = ""                # REQUIRED;原始 1/2/3 与 REF/ALT 剂量的映射
+phenotype_unit = ""                   # REQUIRED;核实百分数、含水基准及聚合来源
+# 设计要求沿用既有发现／封存划分；父仓库来源已定位，SoyBase 对应关系和严格隔离接口尚未核实。
+sealed_partition_tsv = ""             # REQUIRED;待核实真实清单，不得另划、置空或视为无封存
+
+[variant_policy]
+kind = "biallelic_snv"
+contig_policy = "Chr01_to_Chr20_only" # 冻结核染色体目录，排除 scaffold 与 mtDNA
+min_train_call_rate = 0.98
+maf_min = 0.0
+center = "training_mean"
+per_variant_scale = "none"           # 不逐位点除等位频率标准差
+missing_dosage = "training_mean"
+training_monomorphic = "retain_zero_training_column"
+
+[teacher]
+# 单一跨物种候选，不代表已在大豆完成接口验证；不得按预测分数换教师。
+model = "plantcad/cross_species_acr_train_on_arabidopsis_plantcad2_small"
+revision = ""                        # REQUIRED;未落实则停止功能分支
+output = "logit_positive_minus_logit_negative"
+sequence_length = 600
+frozen = true
+precision_reference = "float32"
+manifest = ""                        # teacher_manifest.json 路径,缺省不加载真实教师
+
+[regions]
+max_windows = 256
+min_usable_windows = 32
+overlap = "forbidden"
+min_train_valid_fraction = 0.95
+sample_selection = "sha256_region_id_seed"
+min_catalog_snps = 2                  # 先按固定标记目录筛候选，再哈希选窗，不看标签或频率
+bed = ""                             # ACR BED 路径;未落实不以 GWAS 峰替代
+fasta = ""                           # 与 SoyBase 变异目录匹配的大豆 FASTA
+
+[solver]
+dtype = "float64"
+simplex_denominator = 4
+rho = [0.0001, 0.001, 0.01, 0.1, 1, 10, 100]
+relative_residual_max = 1.0e-8
+spectral_relative_tolerance = 1.0e-10
+selection_relative_tolerance = 1.0e-10
+feature_identity_relative_tolerance = 1.0e-8
+
+[evaluation]
+outer_split = "existing_soybase_trait_folds" # 随机外层，尚未通过近重复组审计
+outer_split_file = "data/soybase/folds/soybase_protein.csv"
+outer_folds = 10
+inner_split = "group_constrained_within_outer_train" # 待实现及冻结，不改已有外层
+inner_folds = 4
+primary_metric = "mse"
+practical_relative_mse_gain = 0.02
+min_consistent_outer_fraction = 0.80   # 十折对应至少八折同向；评价前固定
+descriptive_group_bootstrap_replicates = 2000
+
+[learning_curve]
+# 每个外层训练分区内固定组哈希顺序、按整组取嵌套子集；预算为材料数上限。
+training_sample_budgets = [128, 512, 2048]
+primary_training_sample_budget = 512
+selection = "nested_group_hash_without_phenotype"
+full_cohort_fit = false               # 全量拟合属后续规模实验，不替代小样本主比较
+
+[baselines.elasticnet]
+l1_ratio = [0.1, 0.5, 0.9, 1.0]
+alpha_max_ratios = [1.0, 0.1, 0.01, 0.001, 0.0001]
+max_iter = 100000
+tol = 1.0e-6
+
+[baselines.gbrt]
+loss = "squared_error"
+max_depth = [1, 2, 3]
+learning_rate = [0.03, 0.1]
+n_estimators = [100, 300]
+min_samples_leaf = 10
+subsample = 1.0
+
+[controls]
+maf_bin_edges = [0.0, 0.01, 0.05, 0.5]
+permutation_replicates = 10
+equal_budget_replicates = 10
+m2_equal_budget_weights = 5
+replicate_seed_rule = "SeedSequence_seed_control_id_repeat_id"
+
+[budget]
+profiling_unique_sequences = 64
+max_teacher_calls = 200000
+max_projected_teacher_gpu_hours = 24
+max_host_ram_fraction = 0.70
