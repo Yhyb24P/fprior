@@ -2,7 +2,7 @@
 # 功能分支沿用原数学定义；参考、编码、教师 manifest 与分组审计完成前不得训练。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v2"
+experiment_version = "soybase_official_funcprior_v3"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -13,15 +13,25 @@ directory = "runs"                    # 本项目独立运行目录；不得写�
 [data]
 # 路径相对本目录(fprior/)
 source_genotypes = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
-source_phenotypes = "data/soybase/raw/phenotype/soybase_grin_protein_2015-08-26.tsv"
+source_phenotypes = "data/soybase/raw/phenotype/grin_protein_studies_manifest.json"
 directory = "preprocessing/processed/soybase_official_v2" # 官方 GT 标准化产物，非训练就绪声明
-source_manifest = ""                  # REQUIRED;原始调用、处理链与测量来源的可核验证据
+source_manifest = "preprocessing/processed/soybase_official_v2/source_manifest.json" # 已验证来源与处理链；划分及教师仍缺失
 raw_calls = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
 reference_build = "Wm82.gnm2.DTC4"     # 官方 README、FASTA 与 VCF REF 已核验
 genotype_encoding = "VCF_GT_ALT_dosage_0_1_2_NaN"
 phenotype_unit = "% seed dry weight"  # GRIN 描述符；观测选择规则仍须核验
 # 新官方队列须冻结独立开发／封存划分；旧材料及其划分保留，不继承父项目划分。
 sealed_partition_tsv = ""             # REQUIRED;新版本清单尚未冻结，不得用空清单替代
+
+[data.protein]
+source_studies_manifest = "data/soybase/raw/phenotype/grin_protein_studies_manifest.json"
+method_documents_manifest = "data/soybase/raw/phenotype/grin_method_documents_manifest.json"
+descriptor_id = 51016
+aggregation = "equal_study_mean_of_within_study_published_values"
+excluded_study_ids = ["490512", "488001"] # developer-supplied or no specified experimental environment
+excluded_study_reason = "insufficient_experimental_provenance"
+missing_label = "exclude_without_imputation"
+transform = "none"
 
 [variant_policy]
 kind = "biallelic_snv"
@@ -50,8 +60,20 @@ overlap = "forbidden"
 min_train_valid_fraction = 0.95
 sample_selection = "sha256_region_id_seed"
 min_catalog_snps = 2                  # 先按固定标记目录筛候选，再哈希选窗，不看标签或频率
-bed = ""                             # ACR BED 路径;未落实不以 GWAS 峰替代
+bed = "preprocessing/processed/soybase_official_v2/seed_ctacrs_selected_windows.bed" # 35 个源中心映射窗；训练有效性待验收
 fasta = "data/soybase/raw/reference/glyma.Wm82.gnm2.DTC4.genome_main.fna"
+
+[regions.mapping]
+version = "seed_ctacrs_lis_exact_map_v1"
+source_dataset = "Wm82.gnm4.atlas_ctACRs.Zhang_Schmitz_2024"
+source_build = "Wm82.gnm4.4PTR"
+source_manifest = "data/soybase/raw/acr/seed_ctacrs_manifest.json"
+source_fasta = "data/soybase/raw/reference/glyma.Wm82.gnm4.4PTR.genome_main.fna"
+source_coordinates = "BED_0based_halfopen"
+min_mapq = 60
+sequence_identity = "full_length_zero_edit"
+reference_policy = "transfer_complete_source_centered_window_without_remidpointing"
+selection_hash_input = "seed_TAB_source_region_id"
 
 [solver]
 dtype = "float64"

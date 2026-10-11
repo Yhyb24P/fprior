@@ -1,20 +1,23 @@
 """Parse official GRIN per-study values, retaining observation provenance."""
 from html.parser import HTMLParser
+from html import unescape
+from collections import defaultdict
 import math
 from pathlib import Path
 import re
 
 
 class StudyTable(HTMLParser):
-    def __init__(self):
+    def __init__(self, table_id='searchtable'):
         super().__init__()
+        self.table_id = table_id
         self.active = False
         self.cell = None
         self.row = []
         self.rows = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == 'table' and dict(attrs).get('id') == 'searchtable':
+        if tag == 'table' and dict(attrs).get('id') == self.table_id:
             self.active = True
         if self.active and tag == 'tr':
             self.row = []
@@ -79,3 +82,47 @@ def protein_study(path: Path, study_id: str, study_name: str) -> list[dict]:
     if len(set(identities)) != len(identities):
         raise ValueError('PROTEIN_STUDY_DUPLICATE_IDENTITY')
     return records
+
+
+def method_document(path: Path, study_id: str, expected_name: str) -> dict:
+    html = Path(path).read_text()
+    name = re.search(r'<span id="MainContent_lblName"[^>]*>(.*?)</span>', html, re.S)
+    if name is None or unescape(name.group(1)).strip() != expected_name:
+        raise ValueError('METHOD_NAME_MISMATCH')
+    table = StudyTable('MainContent_dvMethod')
+    table.feed(html)
+    description = ' '.join(cell for row in table.rows for cell in row if cell)
+    if not description:
+        raise ValueError('METHOD_DESCRIPTION_MISSING')
+    return {'study_id': study_id, 'method_name': expected_name,
+            'published_description': description,
+            'source': f'https://npgsweb.ars-grin.gov/gringlobal/method.aspx?id={study_id}'}
+
+
+def aggregate_studies(records: list[dict], excluded_studies: list[str]) -> list[dict]:
+    """Equal study weights, first averaging within study across published inventory rows.
+
+    Intended for authorized source reconstruction before partition freezing only.
+    Never fit a label model, impute a value, or use a genotype/prediction to weight.
+    """
+    values = defaultdict(lambda: defaultdict(list))
+    identities = defaultdict(set)
+    for record in records:
+        identity = record['accession_id']
+        identities[identity].add(record['grin_accession_id'])
+        if record['study_id'] in excluded_studies or not record['finite_numeric_value']:
+            continue
+        values[identity][record['study_id']].append(float(record['raw_value']))
+    if any(len(ids) != 1 for ids in identities.values()):
+        raise ValueError('NORMALIZED_ACCESSION_AMBIGUITY')
+    results = []
+    for identity, studies in sorted(values.items()):
+        means = [math.fsum(v)/len(v) for v in studies.values()]
+        results.append({'accession_id': identity,
+                        'grin_accession_id': next(iter(identities[identity])),
+                        'protein': math.fsum(means)/len(means),
+                        'study_count': len(studies),
+                        'published_value_count': sum(len(v) for v in studies.values()),
+                        'study_ids': ';'.join(sorted(studies)),
+                        'unit': '% seed dry weight'})
+    return results
