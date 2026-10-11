@@ -84,6 +84,75 @@ def build_d_matrix(teacher, references: list[str], variants_by_window: list[list
     return d
 
 
+def boolean_coefficients(outputs):
+    """Exact Möbius coefficients of F on the complete Boolean haplotype cube."""
+    values = finite_array(outputs, 1, 'haplotype teacher outputs').copy()
+    size = len(values)
+    if size < 4 or size & (size-1):
+        raise ValueError('HAPLOTYPE_CUBE_INCOMPLETE')
+    for bit in range(size.bit_length()-1):
+        for mask in range(size):
+            if mask & (1 << bit):
+                values[mask] -= values[mask ^ (1 << bit)]
+    return values
+
+
+def local_interaction_counts(dosages, windows, *, phased_alleles=None):
+    """All order >=2 haplotype co-occurrences; invalid windows are raw zero.
+
+    The mask and raw-zero rule match R exactly, including coverage structure.
+    No categories, weights or means are learned from test rows. Subset ordering
+    follows increasing binary mask, with the first SNP as the highest bit.
+    """
+    q = np.asarray(dosages, dtype=np.float64)
+    if q.ndim != 2 or not np.isin(q[~np.isnan(q)], [0, 1, 2]).all():
+        raise ValueError('DOSAGE_INVALID')
+    if phased_alleles is not None:
+        phase = np.asarray(phased_alleles, dtype=np.float64)
+        if phase.shape != (*q.shape, 2) or not np.isin(phase[~np.isnan(phase)], [0, 1]).all():
+            raise ValueError('PHASE_SHAPE_OR_ALLELE_INVALID')
+    blocks, masks, subsets = [], [], []
+    for columns in windows:
+        if len(columns) < 2 or len(columns) > 8 or len(set(columns)) != len(columns):
+            raise ValueError('INTERACTION_WINDOW_INVALID')
+        calls = q[:, columns]
+        valid = np.isfinite(calls).all(axis=1)
+        if phased_alleles is None:
+            valid &= (calls == 1).sum(axis=1) <= 1
+            alleles = np.stack([calls >= 1, calls == 2], axis=-1)
+        else:
+            alleles = phase[:, columns]
+            phase_called = np.isfinite(alleles).all(axis=(1, 2))
+            if not np.array_equal(alleles[valid & phase_called].sum(axis=2), calls[valid & phase_called]):
+                raise ValueError('PHASE_DOSAGE_MISMATCH')
+            valid &= phase_called
+        selected = [m for m in range(1 << len(columns)) if m.bit_count() >= 2]
+        block = np.zeros((len(q), len(selected)))
+        for j, subset in enumerate(selected):
+            indices = [i for i in range(len(columns)) if subset & (1 << (len(columns)-1-i))]
+            block[valid, j] = np.all(alleles[valid][:, indices] == 1, axis=1).sum(axis=1)
+        blocks.append(block); masks.append(valid); subsets.append(selected)
+    if not blocks:
+        raise ValueError('INTERACTION_WINDOWS_MISSING')
+    return blocks, np.column_stack(masks), subsets
+
+
+def permuted_residual_features(blocks, coefficients, rng):
+    """Permute full teacher coefficient vectors among equal-arity windows only."""
+    if len(blocks) != len(coefficients) or not blocks:
+        raise ValueError('INTERACTION_COEFFICIENT_ALIGNMENT_INVALID')
+    strata = {}
+    for g, (block, coefficient) in enumerate(zip(blocks, coefficients)):
+        if block.ndim != 2 or len(coefficient) != block.shape[1]:
+            raise ValueError('INTERACTION_COEFFICIENT_SHAPE_INVALID')
+        strata.setdefault(block.shape[1], []).append(g)
+    assignment = np.arange(len(blocks))
+    for indices in strata.values():
+        assignment[indices] = rng.permutation(indices)
+    values = np.column_stack([block@coefficients[assignment[g]] for g, block in enumerate(blocks)])
+    return values, assignment
+
+
 def build_features(dosages, d_matrix, functional_outputs, valid_mask):
     """functional_outputs is raw U, with the diploid reference already subtracted."""
     q = finite_array(dosages, 2, 'imputed dosages')

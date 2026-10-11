@@ -1,8 +1,7 @@
-# SoyBase 实验参数与输入预检配置；缺少必填输入，不能运行真实训练。
-# 功能分支沿用原数学定义；参考、编码、教师 manifest 与分组审计完成前不得训练。
+# SoyBase 实验参数；正式预测仍须通过 Study 审计与合成功效验收。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v3"
+experiment_version = "soybase_official_funcprior_v4"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -15,7 +14,7 @@ directory = "runs"                    # 本项目独立运行目录；不得写�
 source_genotypes = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
 source_phenotypes = "data/soybase/raw/phenotype/grin_protein_studies_manifest.json"
 directory = "preprocessing/processed/soybase_official_v2" # 官方 GT 标准化产物，非训练就绪声明
-source_manifest = "preprocessing/processed/soybase_official_v2/source_manifest.json" # 已验证来源与处理链；划分及教师仍缺失
+source_manifest = "preprocessing/processed/soybase_official_v2/source_manifest.json" # 复用已验收 v3 输入；新对照使用独立实验版本
 raw_calls = "data/soybase/raw/genotype/glyma.Wm82.gnm2.div.Song_Hyten_2015.vcf.gz"
 reference_build = "Wm82.gnm2.DTC4"     # 官方 README、FASTA 与 VCF REF 已核验
 genotype_encoding = "VCF_GT_ALT_dosage_0_1_2_NaN"
@@ -45,7 +44,7 @@ missing_dosage = "training_mean"
 training_monomorphic = "retain_zero_training_column"
 
 [teacher]
-# 单一跨物种候选，不代表已在大豆完成接口验证；不得按预测分数换教师。
+# 单一跨物种候选，已完成接口复现验收；尚不证明大豆 ACR 判别或 protein 预测价值。
 model = "plantcad/cross_species_acr_train_on_arabidopsis_plantcad2_small"
 revision = "a76b001f89a3be2e12990158bb1903ccddd17625"
 output = "logit_positive_minus_logit_negative"
@@ -63,7 +62,7 @@ overlap = "forbidden"
 min_train_valid_fraction = 0.95
 sample_selection = "sha256_region_id_seed"
 min_catalog_snps = 2                  # 先按固定标记目录筛候选，再哈希选窗，不看标签或频率
-bed = "preprocessing/processed/soybase_official_v2/seed_ctacrs_selected_windows.bed" # 35 个源中心映射窗；训练有效性待验收
+bed = "preprocessing/processed/soybase_official_v2/seed_ctacrs_selected_windows.bed" # 已验收的 35 个固定窗口，不按分数补选
 fasta = "data/soybase/raw/reference/glyma.Wm82.gnm2.DTC4.genome_main.fna"
 
 [regions.mapping]
@@ -140,6 +139,21 @@ permutation_replicates = 10
 equal_budget_replicates = 10
 m2_equal_budget_weights = 5
 replicate_seed_rule = "SeedSequence_seed_control_id_repeat_id"
+residual_weight_permutation_replicates = 10
+residual_weight_permutation_control_id = 2
+residual_weight_permutation_strata = "window_SNP_count"
+interaction_missing_rule = "raw_zero_with_identical_R_validity_mask"
+interaction_basis = "all_haplotype_ALT_cooccurrences_of_order_at_least_two"
+
+[models]
+families = ["M0", "EN", "MD", "MP", "M1", "M2", "MU", "MW", "MWG", "MHap", "MLocal", "FU", "FU-GBRT", "MI", "MRPerm"]
+primary_budget_only = true
+
+[execution]
+blas_threads = 4
+profile_outer_fold = 0              # 真实主预算、四内折及一次外层；响应为固定合成值
+# 正式评价必填：同一实验／划分版本的 P0 Study 审计及 P2 原 720 + 稀疏功效验收。
+pretraining_acceptance = ""
 
 [budget]
 profiling_unique_sequences = 64

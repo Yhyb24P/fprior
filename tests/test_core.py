@@ -234,3 +234,31 @@ def test_sealed_ids_and_order_contract():
         assert_development_only(['a', 'a'], frozenset())
     with pytest.raises(ValueError, match='ORDER_MISMATCH'):
         assert_order(['b', 'a'], ['a', 'b'], 'SAMPLE')
+
+
+def test_gram_rbf_matches_direct_distances_with_duplicate_and_constant_columns():
+    from fprior.kernels import GaussianKernel
+    rng = np.random.default_rng(19)
+    train = rng.normal(size=(9, 41346))
+    train[1] = train[0]
+    train[:, -4:] = 12
+    test = np.vstack([train[1], train[3]+1e-10, rng.normal(size=(1, 41346))])
+    distance = np.sum((train[:, None, :]-train[None, :, :])**2, axis=2)
+    bandwidth = np.median(distance[np.triu_indices(9, 1)][distance[np.triu_indices(9, 1)] > 0])
+    raw = np.exp(-distance/(2*bandwidth))
+    centered = raw-raw.mean(axis=1, keepdims=True)-raw.mean(axis=0)+raw.mean()
+    scale = np.trace(centered)/len(train)
+    direct_cross = np.exp(-np.sum((test[:, None, :]-train[None, :, :])**2, axis=2)/(2*bandwidth))
+    expected = (direct_cross-direct_cross.mean(axis=1, keepdims=True)-raw.mean(axis=0)+raw.mean())/scale
+    fitted = GaussianKernel.fit(train, raw_gram=train@train.T)
+    assert_allclose(fitted.bandwidth, bandwidth, rtol=1e-13)
+    assert_allclose(fitted.normalized_train, centered/scale, atol=1e-13)
+    assert_allclose(fitted.transform(test, raw_cross=test@train.T), expected, atol=1e-13)
+
+
+def test_gram_distance_repairs_close_far_offset_pairs():
+    from fprior.kernels import _squared_distances
+    values = np.array([[0., 0.], [1e10, 1e10], [1e10+.01, 1e10-.02]])
+    expected = np.sum((values[:, None, :]-values[None, :, :])**2, axis=2)
+    assert_allclose(_squared_distances(values, values), expected, rtol=1e-14, atol=0)
+    assert_allclose(_squared_distances(values, values, values@values.T), expected, rtol=1e-14, atol=0)

@@ -1,6 +1,7 @@
 """Training-normalized linear and Gaussian control kernels."""
 from __future__ import annotations
 import numpy as np
+from dataclasses import dataclass
 from .io import finite_array
 
 
@@ -30,34 +31,89 @@ def center_cross_kernel(k_star_t, k_tt):
     return cross - cross.mean(axis=1, keepdims=True) - train.mean(axis=0) + train.mean()
 
 
-def _squared_distances(left, right):
-    # Direct differences avoid cancellation when coordinates share a large offset.
-    distances = np.zeros((len(left), len(right)))
-    for column in range(left.shape[1]):
-        distances += (left[:, column, None] - right[None, :, column]) ** 2
+def _squared_distances(left, right, inner_product=None):
+    """Gram distances, with bounded direct repair of cancellation-sensitive pairs.
+
+    A shared translation improves conditioning when no raw Gram is supplied.
+    Caller-supplied inner products must correspond to the original feature rows.
+    Close pairs use direct subtraction; clipping alone could turn duplicate rows
+    into positive distances and change the training bandwidth.
+    """
+    if inner_product is None:
+        origin = right[0]
+        a, b = left-origin, right-origin
+        gram = a @ b.T
+    else:
+        a, b = left, right
+        gram = finite_array(inner_product, 2, 'raw inner product')
+        if gram.shape != (len(left), len(right)):
+            raise ValueError('DISTANCE_INNER_PRODUCT_SHAPE_INVALID')
+    norms_left = np.einsum('ij,ij->i', a, a)
+    norms_right = np.einsum('ij,ij->i', b, b)
+    distances = norms_left[:, None] + norms_right - 2*gram
+    bound = (8*np.finfo(float).eps*max(1, left.shape[1])
+             * (norms_left[:, None]+norms_right+2*np.abs(gram)))
+    if (distances < -bound).any():
+        raise ValueError('DISTANCE_INNER_PRODUCT_INCONSISTENT')
+    uncertain = (np.abs(distances) <= bound) & (bound > 0)
+    if left is right:
+        np.fill_diagonal(distances, 0)
+        np.fill_diagonal(uncertain, False)
+    rows, columns = np.where(uncertain)
+    chunk = max(1, 1048576 // max(1, left.shape[1]))
+    for offset in range(0, len(rows), chunk):
+        selected_rows = rows[offset:offset+chunk]
+        selected_columns = columns[offset:offset+chunk]
+        difference = left[selected_rows] - right[selected_columns]
+        distances[selected_rows, selected_columns] = np.einsum('ij,ij->i', difference, difference)
     if not np.isfinite(distances).all():
         raise ValueError('KERNEL_DISTANCE_NONFINITE')
     return distances
 
 
-def rbf_kernel(b_train, b_test=None):
-    train = finite_array(b_train, 2, 'training features')
-    test = train if b_test is None else finite_array(b_test, 2, 'test features')
-    if not len(train) or train.shape[1] != test.shape[1]:
-        raise ValueError('FEATURE_SHAPE_INVALID')
-    distances = _squared_distances(train, train)
-    positive = distances[np.triu_indices(len(train), k=1)]
-    positive = positive[positive > 0]
-    if not len(positive):
-        return np.zeros((len(test), len(train))), 0.0
-    bandwidth = float(np.median(positive))
-    raw_train = np.exp(-distances / (2 * bandwidth))
-    centered = center_cross_kernel(raw_train, raw_train)
-    c = float(np.trace(centered) / len(train))
-    if c <= 0 or not np.isfinite(c):
-        raise ValueError('RBF_NORMALIZATION_FAILED')
-    raw_cross = raw_train if b_test is None else np.exp(-_squared_distances(test, train) / (2 * bandwidth))
-    return center_cross_kernel(raw_cross, raw_train) / c, bandwidth
+@dataclass(frozen=True)
+class GaussianKernel:
+    train: np.ndarray
+    bandwidth: float
+    raw_train: np.ndarray
+    normalized_train: np.ndarray
+    scale: float
+
+    @classmethod
+    def fit(cls, features, *, raw_gram=None):
+        train = finite_array(features, 2, 'training features').copy()
+        if not len(train):
+            raise ValueError('EMPTY_TRAINING_PARTITION')
+        distances = _squared_distances(train, train, raw_gram)
+        positive = distances[np.triu_indices(len(train), k=1)]
+        positive = positive[positive > 0]
+        if not len(positive):
+            zeros = np.zeros((len(train), len(train)))
+            return cls(train, 0., zeros, zeros, 0.)
+        bandwidth = float(np.median(positive))
+        raw_train = np.exp(-distances/(2*bandwidth))
+        centered = center_cross_kernel(raw_train, raw_train)
+        scale = float(np.trace(centered)/len(train))
+        if scale <= 0 or not np.isfinite(scale):
+            raise ValueError('RBF_NORMALIZATION_FAILED')
+        return cls(train, bandwidth, raw_train, centered/scale, scale)
+
+    def transform(self, features, *, raw_cross=None):
+        test = finite_array(features, 2, 'test features')
+        if test.shape[1] != self.train.shape[1]:
+            raise ValueError('FEATURE_SHAPE_INVALID')
+        if self.bandwidth == 0:
+            return np.zeros((len(test), len(self.train)))
+        distances = _squared_distances(test, self.train, raw_cross)
+        raw = np.exp(-distances/(2*self.bandwidth))
+        return center_cross_kernel(raw, self.raw_train)/self.scale
+
+
+def rbf_kernel(b_train, b_test=None, *, raw_train=None, raw_cross=None):
+    fitted = GaussianKernel.fit(b_train, raw_gram=raw_train)
+    result = (fitted.normalized_train if b_test is None else
+              fitted.transform(b_test, raw_cross=raw_cross))
+    return result, fitted.bandwidth
 
 
 def diagonal_annotation_kernel(x_train, v):
@@ -97,12 +153,13 @@ def local_rbf_kernels(x_windowed, test_windowed=None):
     train_kernels, cross_kernels, removed = [], [], []
     shape = None
     for index, window in enumerate(x_windowed):
-        kernel, bandwidth = rbf_kernel(window)
+        fitted = GaussianKernel.fit(window)
+        kernel, bandwidth = fitted.normalized_train, fitted.bandwidth
         if shape is None:
             shape = kernel.shape
         if kernel.shape != shape:
             raise ValueError('WINDOW_SAMPLE_ORDER_MISMATCH')
-        cross = None if test_windowed is None else rbf_kernel(window, test_windowed[index])[0]
+        cross = None if test_windowed is None else fitted.transform(test_windowed[index])
         if bandwidth == 0:
             removed.append(index)
         else:
