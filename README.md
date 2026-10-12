@@ -32,7 +32,7 @@
 
 `io` 提供固定 ID、缓存来源与划分哈希核验，以及按授权 ID 偏移读取开发标签。`features` 和 `design` 构建可信单倍型、D/A/U/R、无教师的完整局部交互基和全部对照核；QC、填补、中心化、MAF 分层置乱及单倍型类别均在当前训练分区拟合。全维 RBF 复用原始加性内积，对接近零的距离作直接差分校正。
 
-`baselines` 实现 ElasticNet 和 FU-GBRT 的配置网格、折内拟合及收敛检查；EN按l1比例使用强到弱的正则路径，高维混合L1/L2候选可用同一目标的对偶求解达到原收敛门槛；纯L1在变量子集中求解，每轮核对全部SNP并检查完整dual gap。`experiment` 按固定四内折 pooled MSE 选参、外层重拟合和保存预测后不再选优，同权重分解跨模型复用。`eval` 实现 MSE、MAE、PCC、校准、训练均值基准 Q² 和整组 bootstrap。`runner` 提供主预算诊断、使用合成响应的全模型成本测量及真实protein的十折开发评价。实现与实验分别验收，结果见验收记录。
+`baselines` 实现 ElasticNet 和 FU-GBRT 的配置网格、折内拟合及收敛检查；EN按l1比例使用强到弱的正则路径，高维混合L1/L2候选可用同一目标的对偶求解达到原收敛门槛；纯L1在变量子集中求解，每轮核对全部SNP并检查完整dual gap。`experiment` 按固定四内折 pooled MSE 选参、外层重拟合和保存预测后不再选优，同权重分解跨模型复用。`eval` 实现 MSE、MAE、PCC、校准、训练均值基准 Q² 和整组 bootstrap。`runner` 按配置预算提供无表型诊断、单外折完整成本测量及真实protein的十折开发评价；成本测量的响应由 `execution.profile_response` 指定。实现与实验分别验收，结果见验收记录。
 
 `teacher` 的本地文件校验、固定 PlantCAD2/LoRA 和分类头恢复、原始 logits、版本／序列缓存沿用已验收实现；模型微批次固定为 1。同一版本的已保存输出可复用，教师保持不变；重复检查仅在相关输入或实现变化时进行。
 
@@ -47,8 +47,8 @@ python -m fprior validate --config configs/funcprior.toml
 开发命令使用同一份配置：
 
 ```bash
-python -m fprior diagnose   # 主预算十外折／四内折的无表型核诊断
-python -m fprior profile    # 固定一外折完整比较成本，使用合成响应
+python -m fprior diagnose   # 配置预算十外折／四内折的无表型核诊断
+python -m fprior profile    # 固定一外折完整比较成本，响应读取配置
 python -m fprior evaluate   # 完整十折真实protein开发评价，封存表型保持隔离
 ```
 
@@ -56,7 +56,7 @@ python -m fprior evaluate   # 完整十折真实protein开发评价，封存表�
 
 Study历史精度、720／1,200组合成研究、跨实例复用和完整预训练证据不再作为执行前提；尚缺研究记为 `NOT_COMPLETED`。协议版本及输入摘要在[配置](configs/funcprior.toml)，运行证据要求见[验收规范 §7](docs/验收规范.md)。输出只写入独立 `runs/` 目录，结果不构成独立验证。
 
-外折并发数、数值线程数及当前敏感性预算读取唯一配置；CUDA用于双精度大矩阵计算，线程、设备及资源实测记录随运行保存。主预算保持512，`follow_up.training_budget` 可指定原登记的128／512／2048预算；`profile_response=development_protein` 时，现有 `profile` 只用对应训练材料的真实标签测量一外折成本。
+外折并发数、数值线程数及当前敏感性预算读取唯一配置；CUDA用于双精度大矩阵乘法及EN计算，核特征分解使用CPU，线程、设备及资源实测记录随运行保存。主预算保持512，`follow_up.training_budget` 可指定原登记的128／512／2048预算，并同时影响上述三个命令。`profile_response=development_protein` 时，现有 `profile` 只用对应训练材料的真实标签测量一外折成本，不计算外层评价指标；合成响应不读取真实标签。执行前应核对当前配置，不能将2048成本测量配置当作512主比较配置。
 
 合成数学检查：
 
