@@ -56,7 +56,7 @@ python -m fprior evaluate   # 完整十折真实protein开发评价，封存表�
 
 Study历史精度、720／1,200组合成研究、跨实例复用和完整预训练证据不再作为执行前提；尚缺研究记为 `NOT_COMPLETED`。协议版本及输入摘要在[配置](configs/funcprior.toml)，运行证据要求见[验收规范 §7](docs/验收规范.md)。输出只写入独立 `runs/` 目录，结果不构成独立验证。
 
-执行配置采用六个外折进程、每进程四个数值线程，使用CUDA进行双精度大矩阵计算；线程、设备及资源实测记录随运行保存。
+外折并发数、数值线程数及当前敏感性预算读取唯一配置；CUDA用于双精度大矩阵计算，线程、设备及资源实测记录随运行保存。主预算保持512，`follow_up.training_budget` 可指定原登记的128／512／2048预算；`profile_response=development_protein` 时，现有 `profile` 只用对应训练材料的真实标签测量一外折成本。
 
 合成数学检查：
 

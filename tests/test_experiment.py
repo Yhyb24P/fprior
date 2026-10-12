@@ -14,9 +14,10 @@ def fixture():
     config, _ = load_config(Path(__file__).parents[1]/'configs/funcprior.toml')
     config = deepcopy(config)
     config['execution']['compute_device'] = 'cpu'
+    config['follow_up']['leave_out_window_index'] = -1
     config['regions']['min_usable_windows'] = 2
     config['controls'].update(permutation_replicates=1, residual_weight_permutation_replicates=1,
-                              equal_budget_replicates=1, m2_equal_budget_weights=2)
+                              equal_budget_replicates=1, m2_equal_budget_weights=2, sign_permutation_replicates=1)
     config['solver'].update(simplex_denominator=2, rho=[.01, .1])
     config['baselines']['elasticnet'].update(l1_ratio=[.5], alpha_max_ratios=[1., .1])
     config['baselines']['gbrt'].update(max_depth=[1], learning_rate=[.1], n_estimators=[10], min_samples_leaf=2)
@@ -51,7 +52,7 @@ def test_nested_all_families_frozen_outer_predictions_and_groups():
     folds = np.arange(48) % 4
     build = lambda a, b: build_design(a, b, windows, cubes, c, noise_threshold=1e-8)
     result = nested_predictions(train, test, y, folds, build, c, groups=np.arange(48).astype(str))
-    mandatory = set(c['models']['families'])-{'MP', 'MRPerm', 'MRPerm3'}
+    mandatory = set(c['models']['families'])-{'MP', 'MRPerm', 'MRPerm3', 'MSign'}
     assert mandatory <= set(result['predictions'])
     assert {'MP:0', 'MRPerm:0', 'MRPerm3:0', 'M2Equal:0', 'Deployment'} <= set(result['predictions'])
     assert result['outer_labels_accessed'] is False
@@ -131,3 +132,79 @@ def test_development_admission_accepts_incomplete_study_and_simulations(tmp_path
     (tmp_path/'dosages.npy').write_bytes(b'changed genotype input')
     with pytest.raises(ValueError, match='INPUT_IDENTITY_MISMATCH'):
         _acceptance(c, tmp_path, data)
+
+
+def test_sign_control_preserves_magnitudes_and_diagonal_but_changes_covariance():
+    c, q, windows, cubes = fixture()
+    c['controls']['sign_permutation_replicates'] = 10
+    signed = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    base = deepcopy(c); base['controls']['sign_permutation_replicates'] = 0
+    base['models']['families'].remove('MSign')
+    original = build_design(q[:48], q[48:], windows, cubes, base, noise_threshold=1e-8)
+    for key in original.kernels:
+        for a, b in zip(original.kernels[key], signed.kernels[key]):
+            np.testing.assert_array_equal(a, b)
+    for effects in signed.diagnostics['MSign_effects']:
+        for a, b in zip(original.diagnostics['D_singleton_effects'], effects):
+            np.testing.assert_array_equal(np.abs(a), np.abs(b))
+            np.testing.assert_array_equal(np.diag(np.outer(a, a)), np.diag(np.outer(b, b)))
+    assert max(signed.diagnostics['MSign_changed_offdiagonal_fraction']) > 0
+    candidates = _all_candidates(signed, c)
+    assert candidates['M1'][1] == candidates['MSign:0'][1]
+    changed = q[48:].copy(); changed[:, 0] = 2
+    other = build_design(q[:48], changed, windows, cubes, c, noise_threshold=1e-8)
+    for repeat in range(10):
+        np.testing.assert_array_equal(signed.kernels[f'FS:{repeat}'][0], other.kernels[f'FS:{repeat}'][0])
+
+
+def test_leave_one_window_out_preserves_global_additive_input():
+    c, q, windows, cubes = fixture()
+    full = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    c['follow_up']['leave_out_window_index'] = 1
+    c['regions']['min_usable_windows'] = 1
+    reduced = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    assert reduced.diagnostics['usable_windows'] == [0]
+    assert reduced.features['R'][0].shape[1] == 1
+    for a, b in zip(full.kernels['A'], reduced.kernels['A']):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_real_protein_profile_uses_only_requested_training_labels(tmp_path, monkeypatch):
+    import fprior.runner as runner
+    from types import SimpleNamespace
+    c, _, _, _ = fixture(); c['execution']['blas_threads'] = 1
+    c['execution']['profile_response'] = 'development_protein'
+    requested = []
+    fake = SimpleNamespace(teacher_validation={'signal_rms_threshold': 1e-8}, windows=[], outputs=[],
+        manifest_path=tmp_path/'partition.json', genotypes=lambda ids: np.ones((len(ids), 2)),
+        context=lambda fold, budget: (['train_a', 'train_b'], ['test_a'], np.array([0, 1]), ['g_a', 'g_b']))
+    monkeypatch.setattr(runner, 'OfficialDevelopmentData', lambda config, root: fake)
+    def labels(path, ids):
+        requested.append(ids)
+        assert ids == ['train_a', 'train_b']
+        return np.array([3., 7.])
+    monkeypatch.setattr(runner, 'load_development_phenotypes', labels)
+    def predictions(train, test, y, inner, build, config, **kwargs):
+        np.testing.assert_array_equal(y, [3., 7.])
+        return {'predictions': {'M0': np.array([5.])}, 'training_mean': 5.}
+    monkeypatch.setattr(runner, 'nested_predictions', predictions)
+    runner._run_fold('profile', 0, c, tmp_path, tmp_path)
+    assert requested == [['train_a', 'train_b']]
+
+
+def test_sensitivity_budget_keeps_primary_512_and_rejects_unregistered_sizes():
+    from fprior.runner import training_budget
+    c, _, _, _ = fixture()
+    c['models']['primary_budget_only'] = False
+    c['follow_up']['training_budget'] = 128
+    assert training_budget(c) == 128
+    assert c['learning_curve']['primary_training_sample_budget'] == 512
+    c['follow_up']['training_budget'] = 2048
+    assert training_budget(c) == 2048
+    c['models']['primary_budget_only'] = True
+    with pytest.raises(ValueError, match='PRIMARY_BUDGET_ONLY'):
+        training_budget(c)
+    c['models']['primary_budget_only'] = False
+    c['follow_up']['training_budget'] = 256
+    with pytest.raises(ValueError, match='TRAINING_BUDGET_NOT_REGISTERED'):
+        training_budget(c)

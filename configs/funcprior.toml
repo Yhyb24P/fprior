@@ -1,7 +1,7 @@
 # SoyBase protein 开发评价；Study与模拟未完成不作为开发训练前置条件。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v6"
+experiment_version = "soybase_official_funcprior_v10_budget2048_cost"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -138,6 +138,8 @@ subsample = 1.0
 [controls]
 maf_bin_edges = [0.0, 0.01, 0.05, 0.5]
 permutation_replicates = 10
+sign_permutation_replicates = 10
+sign_permutation_control_id = 4
 equal_budget_replicates = 10
 m2_equal_budget_weights = 5
 replicate_seed_rule = "SeedSequence_seed_control_id_repeat_id"
@@ -148,18 +150,19 @@ interaction_missing_rule = "raw_zero_with_identical_R_validity_mask"
 interaction_basis = "all_haplotype_ALT_cooccurrences_of_order_at_least_two"
 
 [models]
-families = ["M0", "EN", "MD", "MP", "M1", "M2", "MU", "MW", "MWG", "MHap", "MLocal", "FU", "FU-GBRT", "MI", "MRPerm", "MI3", "MRPerm3"]
-primary_budget_only = true
+families = ["M0", "EN", "MD", "MP", "M1", "M2", "MU", "MW", "MWG", "MHap", "MLocal", "FU", "FU-GBRT", "MI", "MRPerm", "MI3", "MRPerm3", "MSign"]
+primary_budget_only = false
 
 [execution]
-blas_threads = 4
-outer_workers = 6
+profile_response = "development_protein"
+blas_threads = 24
+outer_workers = 1
 compute_device = "cuda"
-profile_outer_fold = 0              # 真实主预算、四内折及一次外层；响应为固定合成值
+profile_outer_fold = 0              # 当前预算、四内折及一次外层；响应由profile_response指定
 
 
 [development_evaluation]
-protocol_version = "soybase_protein_development_v1"
+protocol_version = "soybase_protein_specificity_v1"
 scope = "development_only"
 purpose = "method_development_not_independent_validation"
 primary_reference = "AdditiveSelection"
@@ -167,13 +170,27 @@ auxiliary_reference = "M0"
 sealed_evaluation_authorized = false
 expected_development_accessions = 14020
 expected_windows = 35
-locked_recipe_sha256 = "19db9f4bebcd1423efbb60bd543292fa158f0e90b97c4314a51e7c30118c2c7b"
+locked_recipe_sha256 = "67c4ea0f332a15d3d8688880b3087ea0a52e9e85f85564936a4ca91f2cd9fdd0"
 partition_manifest_sha256 = "192eaa75f3205b599409e9c2c16fc0958ebf29bdcf6fc84682d5740f26c96044"
 source_manifest_sha256 = "94a04dae6405020c6e096f78e444f40a8e32a85a9f7b890d093a53ce8072f641"
 genotypes_sha256 = "a6ef3c9823215b5b270a089d9de15da8358b213dae0efa5a9cba3801e54018f6"
 study_observations_status = "NOT_COMPLETED"
 synthetic_original_status = "NOT_COMPLETED"
 synthetic_sparse_status = "NOT_COMPLETED"
+
+[follow_up]
+training_budget = 2048
+source_development_run = "runs/soybase_official_funcprior_v6_evaluate_20261012T005958958659Z"
+diagnostic_record = "runs/20261012_v6_existing_diagnostics/summary.json"
+sign_rule = "independent_SNP_Rademacher_multipliers_preserve_absolute_D"
+sign_seed_rule = "SeedSequence_seed_control_id_repeat_window_index"
+leave_out_window_index = -1
+planned_leave_out_window_index = 16
+planned_leave_out_region_id = "glyma.Wm82.gnm4.Gm11:8092839-8093340"
+window_selection = "mean_outer_training_centered_R_variance_fraction_v6_no_phenotype"
+interpretation = "post_v6_development_specificity_not_independent_validation"
+full_simulation_matrix = "not_scheduled"
+sealed_values_access = "forbidden"
 
 [budget]
 profiling_unique_sequences = 64
@@ -203,7 +220,8 @@ precision_rule = "half_unit_in_last_published_decimal_place"
 tolerance_rule = "sum_old_and_new_equal_study_propagated_rounding_bounds_plus_float64_roundoff"
 float64_roundoff_multiplier = 32
 require_old_and_new_precision_provenance = true
-require_historical_precision_before_pilot = true
+require_historical_precision_before_pilot = false
+current_check = "descriptive_cross_study_consistency_within_allowed_development_accessions"
 precision_missing = "STOP_WITHOUT_AGGREGATION_ACCEPTANCE"
 source_drift_status = "SOURCE_VERSION_DRIFT"
 unavailable_status = "STUDY_AUDIT_UNAVAILABLE"
@@ -270,7 +288,7 @@ additive_reference = "inner_selected_M0_or_EN"
 first_order_model = "M1"
 first_order_controls = ["MD", "MP"]
 residual_model = "M2"
-residual_controls = ["M1", "MU", "MW", "MWG", "MHap", "MLocal", "MI", "MRPerm", "MI3", "MRPerm3"]
+residual_controls = ["M1", "MU", "MW", "MWG", "MHap", "MLocal", "MI", "MRPerm", "MI3", "MRPerm3", "MSign"]
 matched_control_rule = "strictly_lower_pooled_MSE_than_each_registered_control_repeat"
 require_complete_comparisons = true
 require_complete_coverage_consistency = true

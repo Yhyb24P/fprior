@@ -6,6 +6,7 @@ from pathlib import Path
 import hashlib
 import json
 import multiprocessing
+import os
 import time
 import resource
 import traceback
@@ -40,9 +41,22 @@ def file_sha256(path):
 def recipe_sha256(config):
     fields = ['seed', 'primary_trait_id', 'data', 'variant_policy', 'teacher', 'regions',
               'solver', 'evaluation', 'learning_curve', 'baselines', 'controls', 'models']
+    if 'follow_up' in config:
+        fields.append('follow_up')
     return hashlib.sha256(json.dumps({k: config[k] for k in fields}, sort_keys=True,
         separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
+
+
+def training_budget(config):
+    budget = config.get('follow_up', {}).get('training_budget',
+                    config['learning_curve']['primary_training_sample_budget'])
+    if (not isinstance(budget, int) or isinstance(budget, bool)
+            or budget not in config['learning_curve']['training_sample_budgets']):
+        raise ValueError('TRAINING_BUDGET_NOT_REGISTERED')
+    if config['models']['primary_budget_only'] and budget != config['learning_curve']['primary_training_sample_budget']:
+        raise ValueError('PRIMARY_BUDGET_ONLY')
+    return budget
 
 def _acceptance(config, root, data):
     """Check actual inputs and unchanged recipe; no methodological evidence gate."""
@@ -70,7 +84,7 @@ def _acceptance(config, root, data):
     if any(len(folds) != 1 for folds in groups.values()):
         raise ValueError('OUTER_GROUP_LEAKAGE')
     for fold in range(config['evaluation']['outer_folds']):
-        data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+        data.context(fold, training_budget(config))
     return dict(protocol_version=settings['protocol_version'], input_identity_verified=True,
                 scientific_recipe_sha256=recipe_sha256(config), sealed_values_accessed=False,
                 limitations={key: 'NOT_COMPLETED' for key in
@@ -81,7 +95,7 @@ def _run_fold(command, fold, config, root, directory):
     root, directory = Path(root), Path(directory)
     try:
         data = OfficialDevelopmentData(config, root)
-        train_ids, test_ids, inner, train_groups = data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+        train_ids, test_ids, inner, train_groups = data.context(fold, training_budget(config))
         write_json(directory/f'split_outer_{fold}.json', dict(train_ids=train_ids,
             test_ids=test_ids, inner_folds=inner, train_groups=train_groups))
         train, test = data.genotypes(train_ids), data.genotypes(test_ids)
@@ -104,7 +118,7 @@ def _run_fold(command, fold, config, root, directory):
                 contexts.append(dict(inner_fold=None, train_n=len(train), diagnostics=build(train, test).diagnostics))
                 record = dict(outer_fold=fold, contexts=contexts, phenotypes_accessed=False)
             else:
-                if command == 'profile':
+                if command == 'profile' and config['execution'].get('profile_response', 'synthetic') != 'development_protein':
                     rng = np.random.default_rng(np.random.SeedSequence([config['seed'], 3, fold]))
                     y = rng.normal(size=len(train))
                 else:
@@ -118,7 +132,7 @@ def _run_fold(command, fold, config, root, directory):
                 prediction_path = directory/f'predictions_outer_{fold}.npz'
                 np.savez(prediction_path, sample_ids=np.asarray(test_ids), **record.pop('predictions'))
                 record['prediction_sha256'] = file_sha256(prediction_path)
-            record.update(outer_fold=fold, actual_training_samples=len(train),
+            record.update(outer_fold=fold, actual_training_samples=len(train), training_budget=training_budget(config),
                 split_sha256=file_sha256(directory/f'split_outer_{fold}.json'),
                 peak_host_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)
             if config['execution'].get('compute_device') == 'cuda':
@@ -135,11 +149,12 @@ def _run_fold(command, fold, config, root, directory):
 
 def _collect_predictions(data, config, directory):
     predictions, ids, groups, means, folds = {}, [], [], [], []
-    expected = set(config['models']['families'])-{'MP', 'MRPerm', 'MRPerm3'}
+    expected = set(config['models']['families'])-{'MP', 'MRPerm', 'MRPerm3', 'MSign'}
     for prefix, count in [('MP', config['controls']['permutation_replicates']),
                           ('MRPerm', config['controls']['residual_weight_permutation_replicates']),
                           ('MRPerm3', config['controls']['residual_weight_permutation_replicates']),
-                          ('M2Equal', config['controls']['equal_budget_replicates'])]:
+                          ('M2Equal', config['controls']['equal_budget_replicates']),
+                          ('MSign', config['controls'].get('sign_permutation_replicates', 0))]:
         expected.update(f'{prefix}:{i}' for i in range(count))
     expected.update(['AdditiveSelection', 'Deployment'])
     for fold in range(config['evaluation']['outer_folds']):
@@ -147,7 +162,7 @@ def _collect_predictions(data, config, directory):
         path = directory/f'predictions_outer_{fold}.npz'
         if file_sha256(path) != record['prediction_sha256']:
             raise ValueError('PREDICTION_HASH_MISMATCH')
-        _, test_ids, _, _ = data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+        _, test_ids, _, _ = data.context(fold, training_budget(config))
         with np.load(path, allow_pickle=False) as saved:
             assert_order(saved['sample_ids'].tolist(), test_ids, 'OUTER_PREDICTION_ID')
             if set(saved.files)-{'sample_ids'} != expected:
@@ -165,7 +180,9 @@ def _collect_predictions(data, config, directory):
 
 def run(command, config, root):
     data = OfficialDevelopmentData(config, root)
-    inputs = _acceptance(config, root, data) if command == 'evaluate' else {}
+    uses_protein = (command == 'evaluate' or (command == 'profile' and
+                    config['execution'].get('profile_response') == 'development_protein'))
+    inputs = _acceptance(config, root, data) if uses_protein else {}
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     directory = root/config['output']['directory']/f"{config['experiment_version']}_{command}_{stamp}"
     directory.mkdir(parents=True, exist_ok=False)
@@ -175,7 +192,20 @@ def run(command, config, root):
         implementation_sha256={str(p.relative_to(root)): file_sha256(p)
             for p in sorted((root/'src/fprior').glob('*.py'))},
         config_sha256=file_sha256(directory/'config.json'), sealed_values_accessed=False,
-        response='development_protein' if command == 'evaluate' else 'synthetic' if command == 'profile' else 'none')
+        response='development_protein' if uses_protein else 'synthetic' if command == 'profile' else 'none')
+    import platform
+    import scipy
+    import sklearn
+    environment = dict(python=platform.python_version(), numpy=np.__version__,
+        scipy=scipy.__version__, sklearn=sklearn.__version__,
+        cpu_available=len(os.sched_getaffinity(0)),
+        cpu_model=next((line.split(':', 1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines()
+                        if line.startswith('model name')), 'unknown'),
+        blas_threads=config['execution']['blas_threads'], outer_workers=config['execution'].get('outer_workers', 1))
+    if config['execution'].get('compute_device') == 'cuda':
+        import torch
+        environment.update(torch=torch.__version__, cuda=torch.version.cuda, gpu=torch.cuda.get_device_name())
+    write_json(directory/'environment.json', environment)
     write_json(directory/'inputs.json', inputs)
     print(f'output: {directory}', flush=True)
     start, results = time.perf_counter(), []
@@ -201,9 +231,9 @@ def run(command, config, root):
                 interpretation='conditional descriptive intervals; outer folds share training data; development only')
             write_json(directory/'evaluation.json', summary)
         status = dict(status='COMPLETED', command=command, folds=sorted(results, key=lambda r: r['outer_fold']),
-            seconds=time.perf_counter()-start, output=str(directory), outer_workers=workers,
+            seconds=time.perf_counter()-start, output=str(directory), outer_workers=workers, training_budget=training_budget(config),
             blas_threads_per_worker=config['execution']['blas_threads'],
-            phenotypes_accessed=command == 'evaluate', sealed_values_accessed=False, independent_validation=False)
+            phenotypes_accessed=uses_protein, sealed_values_accessed=False, independent_validation=False)
         write_json(directory/'status.json', status)
         return status
     except Exception as exc:

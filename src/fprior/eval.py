@@ -111,7 +111,7 @@ def development_summary(y, predictions, outer_folds, groups, train_means, config
     contrasts = [(f, primary) for f in predictions if f != primary]
     contrasts += [(f, auxiliary) for f in predictions if f != auxiliary]
     contrasts += [('M1', 'MD'), ('M1', 'EN'), ('M2', 'EN')]
-    contrasts += [('M1', f) for f in predictions if f.startswith('MP:')]
+    contrasts += [('M1', f) for f in predictions if f.startswith(('MP:', 'MSign:'))]
     contrasts += [('M2', f) for f in predictions if f in
         ('M1', 'MU', 'MW', 'MWG', 'MHap', 'MLocal', 'MI', 'MI3')
         or f.startswith(('MRPerm:', 'MRPerm3:'))]

@@ -41,6 +41,8 @@ def equal_budget_weights(config, *, active=None):
 def _all_candidates(design, config):
     mandatory = {'M0', 'EN', 'MD', 'MP', 'M1', 'M2', 'MU', 'MW', 'MWG',
                  'MHap', 'MLocal', 'FU', 'FU-GBRT', 'MI', 'MRPerm', 'MI3', 'MRPerm3'}
+    if config['controls'].get('sign_permutation_replicates', 0):
+        mandatory.add('MSign')
     if set(config['models']['families']) != mandatory:
         raise ValueError('MODEL_COMPARISON_CATALOG_INCOMPLETE')
     families = {name: (list(names), ridge_candidates(names, config,

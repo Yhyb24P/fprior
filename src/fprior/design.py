@@ -32,8 +32,9 @@ def build_design(train, test, windows, outputs, config, *, noise_threshold):
     qe, xe = transform.transform(test)
     blocks_t, valid_t, subsets = local_interaction_counts(train, windows)
     blocks_e, valid_e, _ = local_interaction_counts(test, windows)
+    omitted = config.get('follow_up', {}).get('leave_out_window_index', -1)
     usable = [g for g, columns in enumerate(windows)
-              if transform.retained[columns].all()
+              if g != omitted and transform.retained[columns].all()
               and valid_t[:, g].mean() >= config['regions']['min_train_valid_fraction']]
     if len(usable) < config['regions']['min_usable_windows']:
         raise ValueError('INSUFFICIENT_USABLE_WINDOWS')
@@ -159,6 +160,28 @@ def build_design(train, test, windows, outputs, config, *, noise_threshold):
         linear(name, (xt@dp, xe@dp), functional=True)
         families[f'MP:{repeat}'] = ['A', name]
         diagnostics['MP_changed_fraction'].append(float(changed/total) if total else 0.)
+    diagnostics['MSign_changed_offdiagonal_fraction'] = []
+    diagnostics['MSign_effects'] = []
+    for repeat in range(controls.get('sign_permutation_replicates', 0)):
+        ds = d.copy(); changed = 0; total = 0
+        for j, g in enumerate(usable):
+            columns = local_columns[j]
+            rng = np.random.default_rng(np.random.SeedSequence([
+                config['seed'], controls['sign_permutation_control_id'], repeat, g]))
+            ds[columns, j] *= rng.choice([-1., 1.], size=len(columns))
+            original = np.outer(d[columns, j], d[columns, j])
+            randomized = np.outer(ds[columns, j], ds[columns, j])
+            mask = np.triu(np.ones(original.shape, dtype=bool), 1) & (original != 0)
+            changed += np.count_nonzero((original != randomized) & mask)
+            total += np.count_nonzero(mask)
+        if not np.array_equal(np.abs(ds), np.abs(d)):
+            raise ValueError('SIGN_CONTROL_MAGNITUDE_CHANGED')
+        name = f'FS:{repeat}'
+        linear(name, (xt@ds, xe@ds), functional=True)
+        families[f'MSign:{repeat}'] = ['A', name]
+        diagnostics['MSign_changed_offdiagonal_fraction'].append(changed/total if total else 0.)
+        diagnostics['MSign_effects'].append([ds[local_columns[j], j].tolist()
+                                           for j in range(len(usable))])
     for repeat in range(controls['residual_weight_permutation_replicates']):
         seed = np.random.SeedSequence([config['seed'], controls['residual_weight_permutation_control_id'], repeat])
         pt, assignment = permuted_residual_features(bt, coefficients, np.random.default_rng(seed))
