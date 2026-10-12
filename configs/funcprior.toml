@@ -1,7 +1,7 @@
 # SoyBase protein 开发评价；Study与模拟未完成不作为开发训练前置条件。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v10_budget2048_cost"
+experiment_version = "soybase_official_funcprior_v11_budget2048"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -155,8 +155,8 @@ primary_budget_only = false
 
 [execution]
 profile_response = "development_protein"
-blas_threads = 24
-outer_workers = 1
+blas_threads = 12
+outer_workers = 2
 compute_device = "cuda"
 profile_outer_fold = 0              # 当前预算、四内折及一次外层；响应由profile_response指定
 

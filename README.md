@@ -19,6 +19,8 @@ python -m fprior evaluate
 
 `validate` 仅检查必填字段与文件存在性，不代表输入已验证。`diagnose` 不读取表型；`profile` 测量单外折完整搜索与重拟合成本，响应类型由配置指定；`evaluate` 执行真实protein十折开发评价，内层四折调参。主参照为内层从M0／EN选出的 `AdditiveSelection`，同时报告相对M0及全部匹配对照的结果。
 
+`evaluate --resume runs/<运行目录>` 只续算缺失外折；`evaluate --reuse-profile runs/<成本测量目录>` 可复用通过身份、源码、折内搜索、收敛与预测哈希核验的真实protein单折。两项不能同时使用，核验不符时拒绝复用。
+
 所有参数维护于 [configs/funcprior.toml](configs/funcprior.toml)。运行前核对当前版本、预算、响应类型与设备设置；主预算为512，128／2048为敏感性预算。输入身份、开发ID范围、组约束划分、训练侧预处理及全部模型的数值收敛要求必须满足。
 
 依赖由 [pyproject.toml](pyproject.toml) 管理，普通CPU依赖可用 `python -m pip install -e '.[dev,data,baselines]'` 安装。`.deps/` 为本地依赖目录，不入Git。教师CUDA扩展须与PyTorch、CUDA及GPU架构匹配，迁移时依据本地 `runs/environment_build/` 中的版本与构建记录重新构建。
