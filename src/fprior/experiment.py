@@ -69,7 +69,9 @@ def _evaluate_design(design, y, candidates, config, *, selected=None):
                 if p['l1_ratio'] == grid[indices[0]]['l1_ratio']
                 and p['alpha_ratio'] >= grid[indices[0]]['alpha_ratio']]
             fits = fit_elasticnet_path(design.features[names][0], y, path,
-                                      config['baselines']['elasticnet'], seed=config['seed'])
+                                      dict(config['baselines']['elasticnet'],
+                                           compute_device=config['execution'].get('compute_device', 'cpu')),
+                                      seed=config['seed'])
             by_parameter = {(p['l1_ratio'], p['alpha_ratio']): fit for p, fit in zip(path, fits)}
             for index in indices:
                 p = grid[index]; fit = by_parameter[(p['l1_ratio'], p['alpha_ratio'])]

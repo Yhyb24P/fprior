@@ -9,6 +9,34 @@ import numpy as np
 from .io import finite_array
 
 
+class DenseArithmetic:
+    """Training-centered float64 products, resident on the selected device."""
+    def __init__(self, values, device='cpu'):
+        self.values = values
+        self.tensor = None
+        if device == 'cuda':
+            import torch
+            if not torch.cuda.is_available():
+                raise ValueError('CUDA_UNAVAILABLE')
+            self.tensor = torch.as_tensor(values, dtype=torch.float64, device='cuda')
+        elif device != 'cpu':
+            raise ValueError('COMPUTE_DEVICE_INVALID')
+
+    def dot(self, value, *, transpose=False):
+        if self.tensor is None:
+            return (self.values.T if transpose else self.values)@value
+        import torch
+        matrix = self.tensor.T if transpose else self.tensor
+        return (matrix@torch.as_tensor(value, dtype=torch.float64, device='cuda')).cpu().numpy()
+
+    def gram(self, columns=None):
+        if self.tensor is None:
+            x = self.values if columns is None else self.values[:, columns]
+            return x@x.T
+        x = self.tensor if columns is None else self.tensor[:, columns]
+        return (x@x.T).cpu().numpy()
+
+
 def elasticnet_grid(settings):
     return [dict(l1_ratio=float(l1), alpha_ratio=float(ratio))
             for l1, ratio in product(settings['l1_ratio'], settings['alpha_max_ratios'])]
@@ -20,7 +48,7 @@ def gbrt_grid(settings):
                                                settings['n_estimators'])]
 
 
-def _elasticnet_dual_newton(x, y, alpha, l1, initial, max_iter, tolerance):
+def _elasticnet_dual_newton(x, y, alpha, l1, initial, max_iter, tolerance, arithmetic=None):
     """Solve the identical EN objective in sample space, with a dual certificate.
 
     The primal objective multiplied by n is
@@ -30,18 +58,19 @@ def _elasticnet_dual_newton(x, y, alpha, l1, initial, max_iter, tolerance):
     """
     from scipy.linalg import cho_factor, cho_solve
     n = len(y); a = n*alpha*l1; b = n*alpha*(1-l1)
-    xc = x-x.mean(axis=0); yc = y-y.mean()
-    u = yc-xc@initial
+    arithmetic = arithmetic or DenseArithmetic(x-x.mean(axis=0))
+    xc = arithmetic.values; yc = y-y.mean()
+    u = yc-arithmetic.dot(initial)
     full_gram = None
     limit = tolerance*float(yc@yc)/n
     def state(value):
-        projection = xc.T@value
+        projection = arithmetic.dot(value, transpose=True)
         beta = np.sign(projection)*np.maximum(np.abs(projection)-a, 0)/b
         objective = .5*(value@value)-yc@value+.5*b*(beta@beta)
         return beta, float(objective)
     for iteration in range(max_iter+1):
         beta, objective = state(u)
-        residual = yc-xc@beta
+        residual = yc-arithmetic.dot(beta)
         primal = .5*(residual@residual)+a*np.abs(beta).sum()+.5*b*(beta@beta)
         gap = float((primal+objective)/n)
         roundoff = 64*np.finfo(float).eps*(1+abs(primal)+abs(objective))/n
@@ -52,12 +81,10 @@ def _elasticnet_dual_newton(x, y, alpha, l1, initial, max_iter, tolerance):
         active = beta != 0
         if active.sum() > len(active)//2:
             if full_gram is None:
-                full_gram = xc@xc.T
-            inactive_x = xc[:, ~active]
-            gram = full_gram-inactive_x@inactive_x.T
+                full_gram = arithmetic.gram()
+            gram = full_gram-arithmetic.gram(~active)
         else:
-            active_x = xc[:, active]
-            gram = active_x@active_x.T
+            gram = arithmetic.gram(active)
         hessian = (gram+gram.T)/(2*b)+np.eye(n)
         gradient = u-residual
         direction = -cho_solve(cho_factor(hessian, lower=True), gradient)
@@ -75,16 +102,18 @@ def _elasticnet_dual_newton(x, y, alpha, l1, initial, max_iter, tolerance):
     raise ValueError(f'BASELINE_NOT_CONVERGED:solver=dual_newton,dual_gap={gap},limit={limit}')
 
 
-def _lasso_working_set(x, y, alpha, initial, max_iter, tolerance):
+def _lasso_working_set(x, y, alpha, initial, max_iter, tolerance, arithmetic=None):
     """Coordinate subproblems, certified against every original SNP column."""
     from sklearn.linear_model import Lasso
     from sklearn.exceptions import ConvergenceWarning
-    n, p = x.shape; xc = x-x.mean(axis=0); yc = y-y.mean()
+    n, p = x.shape
+    arithmetic = arithmetic or DenseArithmetic(x-x.mean(axis=0))
+    xc = arithmetic.values; yc = y-y.mean()
     beta = initial.copy(); active = set(np.flatnonzero(beta).tolist())
     iterations = 0; limit = tolerance*float(yc@yc)/n
     while True:
-        residual = yc-xc@beta
-        correlations = xc.T@residual
+        residual = yc-arithmetic.dot(beta)
+        correlations = arithmetic.dot(residual, transpose=True)
         norm = float(np.max(np.abs(correlations), initial=0))
         dual = residual*min(1., n*alpha/norm) if norm else residual
         primal = .5*(residual@residual)+n*alpha*np.abs(beta).sum()
@@ -123,7 +152,7 @@ def _lasso_working_set(x, y, alpha, initial, max_iter, tolerance):
                 zero = support[changes][np.isclose(-old[changes]/direction[changes], step,
                                                    rtol=1e-12, atol=0)]
                 candidate[zero] = 0
-            error = yc-xc@candidate
+            error = yc-arithmetic.dot(candidate)
             candidate_primal = .5*(error@error)+n*alpha*np.abs(candidate).sum()
             iterations += 1
             improves = candidate_primal < primal
@@ -172,6 +201,7 @@ class BaselineFit:
 def fit_elasticnet_path(x_train, y_train, parameters, settings, *, seed):
     """Descending alpha within each L1 ratio; immutable fits in caller order."""
     fits = [None]*len(parameters)
+    arithmetic = DenseArithmetic(x_train-x_train.mean(axis=0), settings.get('compute_device', 'cpu'))
     for l1 in dict.fromkeys(p['l1_ratio'] for p in parameters):
         indices = sorted((i for i, p in enumerate(parameters) if p['l1_ratio'] == l1),
                          key=lambda i: -parameters[i]['alpha_ratio'])
@@ -179,7 +209,7 @@ def fit_elasticnet_path(x_train, y_train, parameters, settings, *, seed):
         for index in indices:
             start = time.perf_counter()
             fitted = fit_baseline('EN', x_train, y_train, parameters[index], settings,
-                                  seed=seed, _warm_estimator=estimator)
+                                  seed=seed, _warm_estimator=estimator, _arithmetic=arithmetic)
             estimator = fitted.estimator
             fits[index] = BaselineFit(deepcopy(estimator), fitted.intercept,
                                       fitted.n_features, dict(fitted.diagnostics,
@@ -188,7 +218,7 @@ def fit_elasticnet_path(x_train, y_train, parameters, settings, *, seed):
 
 
 def fit_baseline(family, x_train, y_train, parameters, settings, *, seed,
-                 _warm_estimator=None):
+                 _warm_estimator=None, _arithmetic=None):
     from sklearn.exceptions import ConvergenceWarning
     from sklearn.linear_model import ElasticNet
     from sklearn.ensemble import GradientBoostingRegressor
@@ -200,10 +230,11 @@ def fit_baseline(family, x_train, y_train, parameters, settings, *, seed,
     centered = y-y.mean()
     diagnostics = dict(status='PASSED', family=family, parameters=dict(parameters))
     if family == 'EN':
+        arithmetic = _arithmetic or DenseArithmetic(x-x.mean(axis=0), settings.get('compute_device', 'cpu'))
         l1, ratio = parameters['l1_ratio'], parameters['alpha_ratio']
         if not 0 < l1 <= 1 or not 0 < ratio <= 1:
             raise ValueError('ELASTICNET_PARAMETERS_INVALID')
-        alpha_max = float(np.max(np.abs(x.T@centered), initial=0)/(len(y)*l1))
+        alpha_max = float(np.max(np.abs(arithmetic.dot(centered, transpose=True)), initial=0)/(len(y)*l1))
         diagnostics.update(alpha_max=alpha_max, alpha=alpha_max*ratio)
         if alpha_max == 0:
             diagnostics.update(intercept_only=True, dual_gap=0., iterations=0)
@@ -220,7 +251,7 @@ def fit_baseline(family, x_train, y_train, parameters, settings, *, seed,
             initial = np.asarray(estimator.coef_) if hasattr(estimator, 'coef_') else np.zeros(x.shape[1])
             try:
                 beta, gap, iterations = _lasso_working_set(x, y, alpha_max*ratio, initial,
-                                                          settings['max_iter'], settings['tol'])
+                                                          settings['max_iter'], settings['tol'], arithmetic)
             except ValueError as exc:
                 raise ValueError(f'{exc},parameters={parameters}') from exc
             estimator.coef_ = beta
@@ -240,7 +271,7 @@ def fit_baseline(family, x_train, y_train, parameters, settings, *, seed,
         diagnostics['coordinate_iterations'] = int(estimator.n_iter_)
         if failed and dual_eligible and estimator.n_iter_ < settings['max_iter']:
             beta, gap, iterations = _elasticnet_dual_newton(x, y, alpha_max*ratio, l1,
-                estimator.coef_, settings['max_iter']-int(estimator.n_iter_), settings['tol'])
+                estimator.coef_, settings['max_iter']-int(estimator.n_iter_), settings['tol'], arithmetic)
             estimator.coef_ = beta
             estimator.intercept_ = float(y.mean()-x.mean(axis=0)@beta)
             estimator.dual_gap_ = gap

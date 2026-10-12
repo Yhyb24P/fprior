@@ -1,20 +1,20 @@
-"""Local development-only diagnostics, cost profiling and guarded evaluation."""
+"""Development-only diagnostics, profiling and complete nested evaluation."""
 from __future__ import annotations
-
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import json
+import multiprocessing
 import time
 import resource
-import os
+import traceback
 import numpy as np
 from threadpoolctl import threadpool_limits, threadpool_info
-from .io import OfficialDevelopmentData, load_development_phenotypes
-from .io import assert_order
+from .io import OfficialDevelopmentData, load_development_phenotypes, assert_order, validate_inputs
 from .design import build_design
 from .experiment import nested_predictions
-from .eval import paired_metrics, group_bootstrap_interval
+from .eval import development_summary
 
 
 def write_json(path, value):
@@ -29,132 +29,184 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(8*1024*1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def recipe_sha256(config):
+    fields = ['seed', 'primary_trait_id', 'data', 'variant_policy', 'teacher', 'regions',
+              'solver', 'evaluation', 'learning_curve', 'baselines', 'controls', 'models']
+    return hashlib.sha256(json.dumps({k: config[k] for k in fields}, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
 def _acceptance(config, root, data):
+    """Check actual inputs and unchanged recipe; no methodological evidence gate."""
     if not config.get('primary_trait_id'):
         raise ValueError('TARGET_UNSPECIFIED')
     if config['primary_trait_id'] != 'protein':
-        raise ValueError('TARGET_SOURCE_MISMATCH: frozen interface contains protein only')
-    value = config['execution']['pretraining_acceptance']
-    if not value:
-        raise ValueError('PRETRAINING_ACCEPTANCE_MISSING: development Study audit and synthetic power validation required')
-    evidence = json.loads((root/value).read_text())
-    expected = hashlib.sha256(data.manifest_path.read_bytes()).hexdigest()
-    if (evidence.get('experiment_version') != config['experiment_version']
-            or evidence.get('partition_manifest_sha256') != expected
-            or evidence.get('study_audit', {}).get('status') != 'PASSED'
-            or evidence.get('study_audit', {}).get('development_only') is not True
-            or evidence.get('synthetic_original', {}).get('datasets') != 720
-            or evidence.get('synthetic_original', {}).get('status') != 'PASSED'
-            or evidence.get('synthetic_sparse', {}).get('status') != 'PASSED'):
-        raise ValueError('PRETRAINING_ACCEPTANCE_INCOMPLETE')
+        raise ValueError('TARGET_SOURCE_MISMATCH')
+    preflight = validate_inputs(config, root)
+    if preflight['issues']:
+        raise ValueError('MISSING_REQUIRED_INPUTS: '+str(preflight['issues']))
+    settings = config['development_evaluation']
+    if recipe_sha256(config) != settings['locked_recipe_sha256']:
+        raise ValueError('SCIENTIFIC_RECIPE_CHANGED')
+    for key, path in [('partition_manifest_sha256', data.manifest_path),
+                      ('source_manifest_sha256', root/config['data']['source_manifest']),
+                      ('genotypes_sha256', data.directory/'dosages.npy')]:
+        if file_sha256(path) != settings[key]:
+            raise ValueError('INPUT_IDENTITY_MISMATCH: '+key)
+    if len(data.development) != settings['expected_development_accessions'] or len(data.windows) != settings['expected_windows']:
+        raise ValueError('DEVELOPMENT_SCOPE_MISMATCH')
+    # Validate every fixed split before requesting any phenotype rows.
+    groups = {}
+    for row in data.development.values():
+        groups.setdefault(row['group_id'], set()).add(int(row['outer_fold']))
+    if any(len(folds) != 1 for folds in groups.values()):
+        raise ValueError('OUTER_GROUP_LEAKAGE')
+    for fold in range(config['evaluation']['outer_folds']):
+        data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+    return dict(protocol_version=settings['protocol_version'], input_identity_verified=True,
+                scientific_recipe_sha256=recipe_sha256(config), sealed_values_accessed=False,
+                limitations={key: 'NOT_COMPLETED' for key in
+                    ('study_observations', 'synthetic_original', 'synthetic_sparse')})
+
+
+def _run_fold(command, fold, config, root, directory):
+    root, directory = Path(root), Path(directory)
+    try:
+        data = OfficialDevelopmentData(config, root)
+        train_ids, test_ids, inner, train_groups = data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+        write_json(directory/f'split_outer_{fold}.json', dict(train_ids=train_ids,
+            test_ids=test_ids, inner_folds=inner, train_groups=train_groups))
+        train, test = data.genotypes(train_ids), data.genotypes(test_ids)
+        from sklearn.linear_model import ElasticNet  # noqa: F401
+        from sklearn.ensemble import GradientBoostingRegressor  # noqa: F401
+        if config['execution'].get('compute_device') == 'cuda':
+            import torch
+            torch.set_num_threads(config['execution']['blas_threads'])
+        threshold = data.teacher_validation['signal_rms_threshold']
+        build = lambda a, b: build_design(a, b, data.windows, data.outputs, config, noise_threshold=threshold)
+        with threadpool_limits(limits=config['execution']['blas_threads']):
+            write_json(directory/f'threadpools_outer_{fold}.json', threadpool_info())
+            print(f'{command}: outer={fold}, train={len(train)}, test={len(test)}', flush=True)
+            if command == 'diagnose':
+                contexts = []
+                for part in range(config['evaluation']['inner_folds']):
+                    training = inner != part
+                    contexts.append(dict(inner_fold=part, train_n=int(training.sum()),
+                        diagnostics=build(train[training], train[~training]).diagnostics))
+                contexts.append(dict(inner_fold=None, train_n=len(train), diagnostics=build(train, test).diagnostics))
+                record = dict(outer_fold=fold, contexts=contexts, phenotypes_accessed=False)
+            else:
+                if command == 'profile':
+                    rng = np.random.default_rng(np.random.SeedSequence([config['seed'], 3, fold]))
+                    y = rng.normal(size=len(train))
+                else:
+                    y = load_development_phenotypes(data.manifest_path, train_ids)
+                def progress(value):
+                    write_json(directory/f'progress_outer_{fold}.json', dict(value, outer_fold=fold,
+                        peak_host_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024))
+                    print(f"{command}: outer={fold}, inner={value['inner_fold']} completed ({value['seconds']:.1f}s)", flush=True)
+                record = nested_predictions(train, test, y, inner, build, config,
+                    groups=train_groups, progress=progress)
+                prediction_path = directory/f'predictions_outer_{fold}.npz'
+                np.savez(prediction_path, sample_ids=np.asarray(test_ids), **record.pop('predictions'))
+                record['prediction_sha256'] = file_sha256(prediction_path)
+            record.update(outer_fold=fold, actual_training_samples=len(train),
+                split_sha256=file_sha256(directory/f'split_outer_{fold}.json'),
+                peak_host_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)
+            if config['execution'].get('compute_device') == 'cuda':
+                record['gpu'] = dict(device=torch.cuda.get_device_name(),
+                    peak_allocated_bytes=torch.cuda.max_memory_allocated(),
+                    peak_reserved_bytes=torch.cuda.max_memory_reserved(), dtype='float64')
+            write_json(directory/f'outer_{fold}.json', record)
+            print(f'{command}: outer={fold} completed', flush=True)
+            return dict(outer_fold=fold, actual_training_samples=len(train))
+    except Exception as exc:
+        write_json(directory/f'failure_outer_{fold}.json', dict(error=str(exc), traceback=traceback.format_exc()))
+        raise
+
+
+def _collect_predictions(data, config, directory):
+    predictions, ids, groups, means, folds = {}, [], [], [], []
+    expected = set(config['models']['families'])-{'MP', 'MRPerm', 'MRPerm3'}
+    for prefix, count in [('MP', config['controls']['permutation_replicates']),
+                          ('MRPerm', config['controls']['residual_weight_permutation_replicates']),
+                          ('MRPerm3', config['controls']['residual_weight_permutation_replicates']),
+                          ('M2Equal', config['controls']['equal_budget_replicates'])]:
+        expected.update(f'{prefix}:{i}' for i in range(count))
+    expected.update(['AdditiveSelection', 'Deployment'])
+    for fold in range(config['evaluation']['outer_folds']):
+        record = json.loads((directory/f'outer_{fold}.json').read_text())
+        path = directory/f'predictions_outer_{fold}.npz'
+        if file_sha256(path) != record['prediction_sha256']:
+            raise ValueError('PREDICTION_HASH_MISMATCH')
+        _, test_ids, _, _ = data.context(fold, config['learning_curve']['primary_training_sample_budget'])
+        with np.load(path, allow_pickle=False) as saved:
+            assert_order(saved['sample_ids'].tolist(), test_ids, 'OUTER_PREDICTION_ID')
+            if set(saved.files)-{'sample_ids'} != expected:
+                raise ValueError('COMPARISON_INCOMPLETE: missing model predictions')
+            for family in expected:
+                if saved[family].shape != (len(test_ids),) or not np.isfinite(saved[family]).all():
+                    raise ValueError('PREDICTION_INVALID')
+                predictions.setdefault(family, []).append(saved[family])
+        ids.extend(test_ids); groups.extend(data.development[i]['group_id'] for i in test_ids)
+        means.extend([record['training_mean']]*len(test_ids)); folds.extend([fold]*len(test_ids))
+    if len(set(ids)) != len(ids) or set(ids) != set(data.development):
+        raise ValueError('DEVELOPMENT_COVERAGE_INCOMPLETE')
+    return {f: np.concatenate(p) for f, p in sorted(predictions.items())}, ids, groups, means, folds
 
 
 def run(command, config, root):
     data = OfficialDevelopmentData(config, root)
-    if command == 'evaluate':
-        _acceptance(config, root, data)  # before any labels are requested
+    inputs = _acceptance(config, root, data) if command == 'evaluate' else {}
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     directory = root/config['output']['directory']/f"{config['experiment_version']}_{command}_{stamp}"
     directory.mkdir(parents=True, exist_ok=False)
     write_json(directory/'config.json', config)
-    write_json(directory/'inputs.json', {'partition_manifest_sha256': hashlib.sha256(data.manifest_path.read_bytes()).hexdigest(),
-        'source_manifest_sha256': hashlib.sha256((root/config['data']['source_manifest']).read_bytes()).hexdigest(),
-        'implementation_sha256': {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+    inputs.update(partition_manifest_sha256=file_sha256(data.manifest_path),
+        source_manifest_sha256=file_sha256(root/config['data']['source_manifest']),
+        implementation_sha256={str(p.relative_to(root)): file_sha256(p)
             for p in sorted((root/'src/fprior').glob('*.py'))},
-        'control_seed_rule': config['controls']['replicate_seed_rule'],
-        'equal_budget_hash_rule': 'SHA256(comma_join(SeedSequence(seed,1,repeat).generate_state(4)) + TAB + comma_join(weight:.17g))',
-        'sealed_values_accessed': False, 'response': 'synthetic' if command == 'profile' else 'none' if command == 'diagnose' else 'development_protein'})
-    start = time.perf_counter(); results = []; frozen = []; ids = []; groups = []; means = []
-    ram_limit = config['budget']['max_host_ram_fraction']*os.sysconf('SC_PHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')
-    budget = config['learning_curve']['primary_training_sample_budget']
-    folds = [config['execution']['profile_outer_fold']] if command == 'profile' else range(config['evaluation']['outer_folds'])
-    threshold = data.teacher_validation['signal_rms_threshold']
-    build = lambda a, b: build_design(a, b, data.windows, data.outputs, config, noise_threshold=threshold)
+        config_sha256=file_sha256(directory/'config.json'), sealed_values_accessed=False,
+        response='development_protein' if command == 'evaluate' else 'synthetic' if command == 'profile' else 'none')
+    write_json(directory/'inputs.json', inputs)
+    print(f'output: {directory}', flush=True)
+    start, results = time.perf_counter(), []
+    folds = [config['execution']['profile_outer_fold']] if command == 'profile' else list(range(config['evaluation']['outer_folds']))
     try:
-        # Load estimator extensions before controlling their BLAS/OpenMP pools;
-        # limits applied before a lazy import do not constrain newly loaded libs.
-        from sklearn.linear_model import ElasticNet  # noqa: F401
-        from sklearn.ensemble import GradientBoostingRegressor  # noqa: F401
-        with threadpool_limits(limits=config['execution']['blas_threads']):
-            write_json(directory/'threadpools.json', threadpool_info())
-            for fold in folds:
-                train_ids, test_ids, inner, train_groups = data.context(fold, budget)
-                train = data.genotypes(train_ids); test = data.genotypes(test_ids)
-                print(f'{command}: outer={fold}, train={len(train)}, test={len(test)}', flush=True)
-                if command == 'diagnose':
-                    contexts = []
-                    # These are new functional-kernel diagnostics, not a rerun
-                    # of the previously accepted raw-call audit.
-                    for part in range(config['evaluation']['inner_folds']):
-                        training = inner != part
-                        design = build(train[training], train[~training])
-                        contexts.append({'inner_fold': part, 'train_n': int(training.sum()),
-                                         'diagnostics': design.diagnostics})
-                    contexts.append({'inner_fold': None, 'train_n': len(train),
-                                     'diagnostics': build(train, test).diagnostics})
-                    record = {'outer_fold': fold, 'contexts': contexts, 'phenotypes_accessed': False}
-                else:
-                    if command == 'profile':
-                        # Actual frozen genotype/split sizes; synthetic responses
-                        # are deliberately unrelated to protein and its source.
-                        rng = np.random.default_rng(np.random.SeedSequence([config['seed'], 3, fold]))
-                        y = rng.normal(size=len(train))
-                    else:
-                        y = load_development_phenotypes(data.manifest_path, train_ids)
-                    def progress(value):
-                        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-                        write_json(directory/'progress.json', dict(value, outer_fold=fold, peak_host_rss_bytes=peak))
-                        print(f"{command}: outer={fold}, inner={value['inner_fold']} completed ({value['seconds']:.1f}s)", flush=True)
-                        if peak > ram_limit:
-                            raise ValueError('COMPUTE_BUDGET_EXCEEDED: host RAM')
-                    record = nested_predictions(train, test, y, inner, build, config,
-                                                groups=train_groups, progress=progress)
-                    record['outer_fold'] = fold; record['actual_training_samples'] = len(train)
-                    prediction_path = directory/f'predictions_outer_{fold}.npz'
-                    np.savez(prediction_path, sample_ids=np.asarray(test_ids), **record.pop('predictions'))
-                    record['prediction_sha256'] = hashlib.sha256(prediction_path.read_bytes()).hexdigest()
-                    frozen.append(prediction_path); ids.extend(test_ids)
-                    groups.extend(data.development[i]['group_id'] for i in test_ids)
-                    means.extend([record['training_mean']]*len(test_ids))
-                print(f'{command}: outer={fold} completed', flush=True)
-                write_json(directory/f'outer_{fold}.json', record)
-                results.append({'outer_fold': fold, 'actual_training_samples': len(train)})
-                del train, test
-            if command == 'evaluate':
-                # All outer predictions have been persisted and hashed before
-                # outer values are requested by the evaluation interface.
-                y = load_development_phenotypes(data.manifest_path, ids)
-                predictions = {}; observed_ids = []
-                for path in frozen:
-                    with np.load(path, allow_pickle=False) as saved:
-                        observed_ids.extend(saved['sample_ids'].tolist())
-                        for family in saved.files:
-                            if family != 'sample_ids':
-                                predictions.setdefault(family, []).append(saved[family])
-                predictions = {f: np.concatenate(p) for f, p in predictions.items()}
-                assert_order(observed_ids, ids, 'OUTER_PREDICTION_ID')
-                metrics = paired_metrics(y, predictions, train_means=means)
-                bootstrap = {f: group_bootstrap_interval(y, p, predictions['M0'], groups,
-                    replicates=config['evaluation']['descriptive_group_bootstrap_replicates'], seed=config['seed'])
-                    for f, p in predictions.items() if f != 'M0'}
-                contrasts = [('M1', 'MD'), ('M1', 'EN'), ('M2', 'EN')]
-                contrasts += [('M1', f) for f in predictions if f.startswith('MP:')]
-                contrasts += [('M2', f) for f in predictions if f in ('M1', 'MU', 'MW', 'MWG', 'MHap', 'MLocal', 'MI', 'MI3') or f.startswith(('MRPerm:', 'MRPerm3:'))]
-                paired = {f'{a}_vs_{b}': group_bootstrap_interval(y, predictions[a], predictions[b], groups,
-                    replicates=config['evaluation']['descriptive_group_bootstrap_replicates'], seed=config['seed'])
-                    for a, b in contrasts}
-                write_json(directory/'evaluation.json', {'metrics': metrics, 'group_bootstrap_vs_M0': bootstrap,
-                    'critical_paired_contrasts': paired,
-                    'interpretation': 'conditional descriptive intervals; shared training data make outer folds dependent',
-                    'sealed_evaluation_authorized': False})
-        status = {'status': 'COMPLETED', 'command': command, 'folds': results,
-                  'seconds': time.perf_counter()-start, 'output': str(directory),
-                  'phenotypes_accessed': command == 'evaluate', 'sealed_values_accessed': False,
-                  'formal_comparison': command == 'evaluate'}
-        status['peak_host_rss_bytes'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
+        workers = min(config['execution'].get('outer_workers', 1), len(folds))
+        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn')) as pool:
+            futures = [pool.submit(_run_fold, command, fold, config, root, directory) for fold in folds]
+            for future in as_completed(futures):
+                results.append(future.result())
+                write_json(directory/'progress.json', dict(completed_outer_folds=sorted(r['outer_fold'] for r in results)))
+        if command == 'evaluate':
+            predictions, ids, groups, means, fold_ids = _collect_predictions(data, config, directory)
+            # Every fold/model prediction is complete, persisted and authenticated
+            # before evaluation requests its observed development values.
+            y = load_development_phenotypes(data.manifest_path, ids)
+            observed_path = directory/'evaluation_development.npz'
+            np.savez(observed_path, sample_ids=np.asarray(ids), observed=y,
+                groups=np.asarray(groups), outer_folds=fold_ids, train_means=means)
+            with threadpool_limits(limits=workers*config['execution']['blas_threads']):
+                summary = development_summary(y, predictions, fold_ids, groups, means, config)
+            summary.update(limitations=inputs['limitations'], observed_sha256=file_sha256(observed_path),
+                interpretation='conditional descriptive intervals; outer folds share training data; development only')
+            write_json(directory/'evaluation.json', summary)
+        status = dict(status='COMPLETED', command=command, folds=sorted(results, key=lambda r: r['outer_fold']),
+            seconds=time.perf_counter()-start, output=str(directory), outer_workers=workers,
+            blas_threads_per_worker=config['execution']['blas_threads'],
+            phenotypes_accessed=command == 'evaluate', sealed_values_accessed=False, independent_validation=False)
         write_json(directory/'status.json', status)
         return status
     except Exception as exc:
-        write_json(directory/'status.json', {'status': 'COMPARISON_INCOMPLETE', 'error': str(exc),
-            'seconds': time.perf_counter()-start, 'sealed_values_accessed': False})
+        write_json(directory/'status.json', dict(status='COMPARISON_INCOMPLETE', error=str(exc),
+            seconds=time.perf_counter()-start, sealed_values_accessed=False))
         raise

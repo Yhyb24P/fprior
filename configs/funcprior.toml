@@ -1,7 +1,7 @@
-# SoyBase 实验参数；正式预测仍须通过 Study 观测核查与合成功效验收。
+# SoyBase protein 开发评价；Study与模拟未完成不作为开发训练前置条件。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v5"
+experiment_version = "soybase_official_funcprior_v6"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -153,9 +153,27 @@ primary_budget_only = true
 
 [execution]
 blas_threads = 4
+outer_workers = 6
+compute_device = "cuda"
 profile_outer_fold = 0              # 真实主预算、四内折及一次外层；响应为固定合成值
-# 正式评价必填：同一实验／划分版本的 P0 Study 观测核查及 P2 原 720 + 稀疏功效验收。
-pretraining_acceptance = ""
+
+
+[development_evaluation]
+protocol_version = "soybase_protein_development_v1"
+scope = "development_only"
+purpose = "method_development_not_independent_validation"
+primary_reference = "AdditiveSelection"
+auxiliary_reference = "M0"
+sealed_evaluation_authorized = false
+expected_development_accessions = 14020
+expected_windows = 35
+locked_recipe_sha256 = "19db9f4bebcd1423efbb60bd543292fa158f0e90b97c4314a51e7c30118c2c7b"
+partition_manifest_sha256 = "192eaa75f3205b599409e9c2c16fc0958ebf29bdcf6fc84682d5740f26c96044"
+source_manifest_sha256 = "94a04dae6405020c6e096f78e444f40a8e32a85a9f7b890d093a53ce8072f641"
+genotypes_sha256 = "a6ef3c9823215b5b270a089d9de15da8358b213dae0efa5a9cba3801e54018f6"
+study_observations_status = "NOT_COMPLETED"
+synthetic_original_status = "NOT_COMPLETED"
+synthetic_sparse_status = "NOT_COMPLETED"
 
 [budget]
 profiling_unique_sequences = 64
@@ -163,13 +181,9 @@ max_teacher_calls = 200000
 max_projected_teacher_gpu_hours = 24
 max_host_ram_fraction = 0.70
 
-# 补充协议只定义训练前要求；配置填写不代表已实现或验收通过。
+# 后续Study与模拟研究设计；本轮开发评价不要求其事先完成。
 [pretraining]
 protocol_version = "soybase_v5_pretraining_v1"
-require_artifact_verification = true
-allow_source_unavailable_exploration = false
-allow_power_limited_exploration = false
-exploratory_authorization_record = ""
 
 [pretraining.study]
 retrieval = "USDA_GRIN_Global_by_allowed_accession_only"

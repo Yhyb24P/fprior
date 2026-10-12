@@ -13,6 +13,7 @@ from fprior.runner import _acceptance
 def fixture():
     config, _ = load_config(Path(__file__).parents[1]/'configs/funcprior.toml')
     config = deepcopy(config)
+    config['execution']['compute_device'] = 'cpu'
     config['regions']['min_usable_windows'] = 2
     config['controls'].update(permutation_replicates=1, residual_weight_permutation_replicates=1,
                               equal_budget_replicates=1, m2_equal_budget_weights=2)
@@ -65,9 +66,10 @@ def test_nested_all_families_frozen_outer_predictions_and_groups():
         assert len(weights) == 2 and (1., 0., 0.) in weights
 
 
-def test_real_evaluation_fails_before_labels_without_pretraining_evidence(tmp_path):
+def test_evaluation_rejects_missing_actual_inputs_not_methodological_evidence(tmp_path):
     c, _, _, _ = fixture()
-    with pytest.raises(ValueError, match='PRETRAINING_ACCEPTANCE_MISSING'):
+    c['execution']['pretraining_acceptance'] = 'not_an_input.json'
+    with pytest.raises(ValueError, match='MISSING_REQUIRED_INPUTS'):
         _acceptance(c, tmp_path, None)
 
 
@@ -91,3 +93,41 @@ def test_linear_teacher_turns_off_residual_without_stopping_additive_comparison(
     candidates = _all_candidates(design, c)
     assert all(p['weights'][2] == 0 for p in candidates['M2'][1])
     assert len(candidates['M2'][1]) == 6  # three two-kernel weights times two rhos
+
+
+def test_gpu_design_matches_cpu_float64():
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA unavailable')
+    c, q, windows, cubes = fixture()
+    cpu = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    c['execution']['compute_device'] = 'cuda'
+    gpu = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    for key in cpu.kernels:
+        for a, b in zip(cpu.kernels[key], gpu.kernels[key]):
+            np.testing.assert_allclose(a, b, atol=1e-11, rtol=1e-11)
+
+
+def test_development_admission_accepts_incomplete_study_and_simulations(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from fprior.runner import file_sha256, recipe_sha256
+    import fprior.runner as runner
+    c, _, _, _ = fixture()
+    for name in ['partition.json', 'source.json', 'dosages.npy']:
+        (tmp_path/name).write_bytes(name.encode())
+    c['data']['source_manifest'] = 'source.json'
+    c['execution']['pretraining_acceptance'] = 'absent.json'
+    c['development_evaluation'].update(expected_development_accessions=10,
+        partition_manifest_sha256=file_sha256(tmp_path/'partition.json'),
+        source_manifest_sha256=file_sha256(tmp_path/'source.json'),
+        genotypes_sha256=file_sha256(tmp_path/'dosages.npy'))
+    c['development_evaluation']['locked_recipe_sha256'] = recipe_sha256(c)
+    data = SimpleNamespace(manifest_path=tmp_path/'partition.json', directory=tmp_path,
+        windows=[None]*35, development={str(i): dict(group_id=str(i), outer_fold=str(i)) for i in range(10)},
+        context=lambda fold, budget: None)
+    monkeypatch.setattr(runner, 'validate_inputs', lambda config, root: dict(issues=[]))
+    result = _acceptance(c, tmp_path, data)
+    assert set(result['limitations'].values()) == {'NOT_COMPLETED'}
+    (tmp_path/'dosages.npy').write_bytes(b'changed genotype input')
+    with pytest.raises(ValueError, match='INPUT_IDENTITY_MISMATCH'):
+        _acceptance(c, tmp_path, data)

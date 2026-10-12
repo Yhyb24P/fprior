@@ -38,3 +38,27 @@ def test_positive_gain_alone_cannot_authorize_next_stage():
                     complete_coverage_passed=True)
     assert continue_decision(.03, [1]*8+[-1]*2, **settings) == 'ELIGIBLE_FOR_NEXT_STAGE_APPLICATION'
     assert continue_decision(.03, [1]*7+[-1]*3, **settings) == 'INCONCLUSIVE_UNDER_BUDGET'
+
+
+def test_development_primary_reference_fold_gains_and_paired_bootstrap():
+    from fprior.eval import development_summary
+    y = np.zeros(5); folds = np.array([0, 0, 1, 1, 1])
+    groups = np.array(['a', 'a', 'b', 'c', 'c'])
+    predictions = {'M0': np.full(5, 3.), 'AdditiveSelection': np.ones(5),
+                   'M1': np.array([.5, .5, 2., 2., 2.]), 'M2': np.full(5, .8),
+                   'EN': np.ones(5), 'MD': np.full(5, 2.)}
+    c = dict(seed=31, development_evaluation=dict(primary_reference='AdditiveSelection',
+             auxiliary_reference='M0'), evaluation=dict(outer_folds=2,
+             descriptive_group_bootstrap_replicates=100))
+    result = development_summary(y, predictions, folds, groups, np.ones(5), c)
+    record = result['paired_comparisons']['M1_vs_AdditiveSelection']
+    assert record['pooled_mse_model'] == pytest.approx(2.5)
+    assert record['relative_pooled_mse_gain'] == pytest.approx(-1.5)
+    assert record['improving_outer_folds'] == 1
+    assert [r['direction'] for r in record['outer_folds']] == [1, -1]
+    assert result['auxiliary_metrics_vs_M0']['M1']['relative_mse_gain_vs_reference'] > 0
+    expected = group_bootstrap_interval(y, predictions['M1'], predictions['AdditiveSelection'], groups, 100, 31)
+    for key in ['lower', 'upper']:
+        assert record['descriptive_group_bootstrap'][key] == pytest.approx(expected[key])
+    with pytest.raises(ValueError, match='OUTER_GROUP_LEAKAGE'):
+        development_summary(y, predictions, folds, ['a']*5, np.ones(5), c)

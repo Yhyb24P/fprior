@@ -125,3 +125,23 @@ def test_lasso_with_redundant_columns_preserves_original_optimum():
     loss = .5*np.mean((y-prediction)**2)+.01*np.abs(beta).sum()
     expected = .5*np.mean((y-cold.predict(x))**2)+.01*np.abs(cold.coef_).sum()
     assert loss == pytest.approx(expected, abs=1e-6)
+
+
+def test_gpu_en_matches_cpu_objective_and_full_certificate():
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA unavailable')
+    s = settings()['elasticnet']; rng = np.random.default_rng(419)
+    x = rng.normal(size=(40, 100)); y = x[:, 0]+rng.normal(size=40)*.2
+    parameters = [dict(l1_ratio=l1, alpha_ratio=ratio)
+                  for l1 in [.5, 1.] for ratio in [1., .1, .01]]
+    cpu = fit_elasticnet_path(x, y, parameters, dict(s, compute_device='cpu'), seed=7)
+    gpu = fit_elasticnet_path(x, y, parameters, dict(s, compute_device='cuda'), seed=7)
+    for a, b in zip(cpu, gpu):
+        np.testing.assert_allclose(a.predict(x), b.predict(x), atol=2e-5, rtol=2e-5)
+        beta = b.estimator.coef_; residual = y-b.predict(x)
+        alpha = b.diagnostics['alpha']; l1 = b.diagnostics['parameters']['l1_ratio']
+        gradient = (x-x.mean(axis=0)).T@residual/len(y)-alpha*(1-l1)*beta
+        active = beta != 0
+        np.testing.assert_allclose(gradient[active], alpha*l1*np.sign(beta[active]), atol=2e-5)
+        assert (np.abs(gradient[~active]) <= alpha*l1+2e-5).all()

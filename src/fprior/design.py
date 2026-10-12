@@ -89,7 +89,18 @@ def build_design(train, test, windows, outputs, config, *, noise_threshold):
             'near_zero_columns': int(np.sum(np.sqrt(np.mean(a*a, axis=0)) <= noise_threshold))}
         kernels[name] = (k, cross)
 
-    raw_gram = xt@xt.T; raw_cross = xe@xt.T
+    if config['execution'].get('compute_device', 'cpu') == 'cuda':
+        import torch
+        if not torch.cuda.is_available():
+            raise ValueError('CUDA_UNAVAILABLE')
+        gt = torch.as_tensor(xt, dtype=torch.float64, device='cuda')
+        ge = torch.as_tensor(xe, dtype=torch.float64, device='cuda')
+        raw_gram = (gt@gt.T).cpu().numpy()
+        raw_cross = (ge@gt.T).cpu().numpy()
+        del gt, ge
+    else:
+        raw_gram = xt@xt.T; raw_cross = xe@xt.T
+    diagnostics['compute_device'] = config['execution'].get('compute_device', 'cpu')
     linear('A', features['X'], gram=raw_gram, cross_gram=raw_cross)
     for name in ('F', 'U', 'R', 'I'):
         linear(name, features[name], functional=name != 'I')

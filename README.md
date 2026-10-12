@@ -32,7 +32,7 @@
 
 `io` 提供固定 ID、缓存来源与划分哈希核验，以及按授权 ID 偏移读取开发标签。`features` 和 `design` 构建可信单倍型、D/A/U/R、无教师的完整局部交互基和全部对照核；QC、填补、中心化、MAF 分层置乱及单倍型类别均在当前训练分区拟合。全维 RBF 复用原始加性内积，对接近零的距离作直接差分校正。
 
-`baselines` 实现 ElasticNet 和 FU-GBRT 的配置网格、折内拟合及收敛检查；EN按l1比例使用强到弱的正则路径，高维混合L1/L2候选可用同一目标的对偶求解达到原收敛门槛；纯L1在变量子集中求解，每轮核对全部SNP并检查完整dual gap。`experiment` 按固定四内折 pooled MSE 选参、外层重拟合和保存预测后不再选优，同权重分解跨模型复用。`eval` 实现 MSE、MAE、PCC、校准、训练均值基准 Q² 和整组 bootstrap。`runner` 提供主预算诊断、使用合成响应的全模型成本测量及受前置验收约束的开发评价。实现与实验分别验收，结果见验收记录。
+`baselines` 实现 ElasticNet 和 FU-GBRT 的配置网格、折内拟合及收敛检查；EN按l1比例使用强到弱的正则路径，高维混合L1/L2候选可用同一目标的对偶求解达到原收敛门槛；纯L1在变量子集中求解，每轮核对全部SNP并检查完整dual gap。`experiment` 按固定四内折 pooled MSE 选参、外层重拟合和保存预测后不再选优，同权重分解跨模型复用。`eval` 实现 MSE、MAE、PCC、校准、训练均值基准 Q² 和整组 bootstrap。`runner` 提供主预算诊断、使用合成响应的全模型成本测量及真实protein的十折开发评价。实现与实验分别验收，结果见验收记录。
 
 `teacher` 的本地文件校验、固定 PlantCAD2/LoRA 和分类头恢复、原始 logits、版本／序列缓存沿用已验收实现；模型微批次固定为 1。同一版本的已保存输出可复用，教师保持不变；重复检查仅在相关输入或实现变化时进行。
 
@@ -49,10 +49,14 @@ python -m fprior validate --config configs/funcprior.toml
 ```bash
 python -m fprior diagnose   # 主预算十外折／四内折的无表型核诊断
 python -m fprior profile    # 固定一外折完整比较成本，使用合成响应
-python -m fprior evaluate   # 前置验收缺失时停止，不读取训练标签
+python -m fprior evaluate   # 完整十折真实protein开发评价，封存表型保持隔离
 ```
 
-`execution.pretraining_acceptance` 必须指向本实验版本、同一固定划分的机器可读验收记录，须核验开发逐Study定向恢复、原720个实际实例、附加1,200个稀疏功效实例及实际结果文件，技术与功效状态分别记录。新的证据要求见[验收规范 §7](docs/验收规范.md)，现有验收接口尚需修改，不能据配置新增字段宣称实现完成。记录缺失时，`evaluate` 返回 `PRETRAINING_ACCEPTANCE_MISSING`。参数、验收字段与解释边界见[任务书](docs/任务书.md)，输出只在独立 `runs/` 目录。
+`evaluate` 核验输入身份、开发ID白名单与既定划分，再执行训练侧预处理、四折内层调参及十折外层评价。主参照是内层从M0／EN选择的 `AdditiveSelection`，同时保留相对M0及全部匹配对照的逐折比较。
+
+Study历史精度、720／1,200组合成研究、跨实例复用和完整预训练证据不再作为执行前提；尚缺研究记为 `NOT_COMPLETED`。协议版本及输入摘要在[配置](configs/funcprior.toml)，运行证据要求见[验收规范 §7](docs/验收规范.md)。输出只写入独立 `runs/` 目录，结果不构成独立验证。
+
+执行配置采用六个外折进程、每进程四个数值线程，使用CUDA进行双精度大矩阵计算；线程、设备及资源实测记录随运行保存。
 
 合成数学检查：
 
@@ -87,4 +91,4 @@ python -m pytest -q tests/test_cuda_extensions.py
 
 ## 当前状态
 
-尚无本轮真实 protein 预测结果。正式评价前还需完成开发 Study 观测核查、原定720个合成机制数据集、真实稀疏功效分析和完整比较成本验收。具体统计、失败试运行及来源证据统一见[验收记录](docs/验收记录.md)；执行与完成条件见[任务书](docs/任务书.md)。
+真实 protein 开发评价按现有配置执行；开发Study观测与两类模拟是后续方法学研究，不限制开发训练。具体统计、失败试运行及来源证据统一见[验收记录](docs/验收记录.md)；执行与完成条件见[任务书](docs/任务书.md)。
