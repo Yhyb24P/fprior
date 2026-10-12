@@ -139,7 +139,7 @@ def run(command, config, root):
                     for f, p in predictions.items() if f != 'M0'}
                 contrasts = [('M1', 'MD'), ('M1', 'EN'), ('M2', 'EN')]
                 contrasts += [('M1', f) for f in predictions if f.startswith('MP:')]
-                contrasts += [('M2', f) for f in predictions if f in ('M1', 'MU', 'MW', 'MWG', 'MHap', 'MLocal', 'MI') or f.startswith('MRPerm:')]
+                contrasts += [('M2', f) for f in predictions if f in ('M1', 'MU', 'MW', 'MWG', 'MHap', 'MLocal', 'MI', 'MI3') or f.startswith(('MRPerm:', 'MRPerm3:'))]
                 paired = {f'{a}_vs_{b}': group_bootstrap_interval(y, predictions[a], predictions[b], groups,
                     replicates=config['evaluation']['descriptive_group_bootstrap_replicates'], seed=config['seed'])
                     for a, b in contrasts}

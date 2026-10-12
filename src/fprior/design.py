@@ -127,7 +127,7 @@ def build_design(train, test, windows, outputs, config, *, noise_threshold):
     families = {'M0': ['A'], 'MD': ['A', 'D'], 'M1': ['A', 'F'],
         'M2': ['A', 'F', 'R'], 'MU': ['A', 'U'], 'MW': ['A', 'GU'],
         'MWG': ['GX', 'GU'], 'MHap': ['A', 'Hap'], 'MLocal': ['A', 'Local'],
-        'FU': ['U'], 'MI': ['A', 'I']}
+        'FU': ['U'], 'MI': ['A', 'I'], 'MI3': ['A', 'F', 'I']}
     controls = config['controls']
     edges = np.asarray(controls['maf_bin_edges'])
     if edges.ndim != 1 or len(edges) < 2 or edges[0] != 0 or edges[-1] != .5 or (np.diff(edges) <= 0).any():
@@ -155,6 +155,7 @@ def build_design(train, test, windows, outputs, config, *, noise_threshold):
         center = ColumnCenterer.fit(pt); name = f'RP:{repeat}'
         linear(name, (center.transform(pt), center.transform(pe)), functional=True)
         families[f'MRPerm:{repeat}'] = ['A', name]
+        families[f'MRPerm3:{repeat}'] = ['A', 'F', name]
         diagnostics['MRPerm_assignments'].append(assignment.tolist())
     names = list(kernels)
     vectors = np.stack([kernels[name][0].ravel() for name in names])

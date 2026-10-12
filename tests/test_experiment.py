@@ -50,9 +50,9 @@ def test_nested_all_families_frozen_outer_predictions_and_groups():
     folds = np.arange(48) % 4
     build = lambda a, b: build_design(a, b, windows, cubes, c, noise_threshold=1e-8)
     result = nested_predictions(train, test, y, folds, build, c, groups=np.arange(48).astype(str))
-    mandatory = set(c['models']['families'])-{'MP', 'MRPerm'}
+    mandatory = set(c['models']['families'])-{'MP', 'MRPerm', 'MRPerm3'}
     assert mandatory <= set(result['predictions'])
-    assert {'MP:0', 'MRPerm:0', 'M2Equal:0', 'Deployment'} <= set(result['predictions'])
+    assert {'MP:0', 'MRPerm:0', 'MRPerm3:0', 'M2Equal:0', 'Deployment'} <= set(result['predictions'])
     assert result['outer_labels_accessed'] is False
     assert result['status'] == 'PREDICTIONS_FROZEN'
     assert all(p.shape == (16,) and np.isfinite(p).all() for p in result['predictions'].values())
@@ -69,6 +69,16 @@ def test_real_evaluation_fails_before_labels_without_pretraining_evidence(tmp_pa
     c, _, _, _ = fixture()
     with pytest.raises(ValueError, match='PRETRAINING_ACCEPTANCE_MISSING'):
         _acceptance(c, tmp_path, None)
+
+
+def test_matched_residual_controls_share_first_two_kernels_and_search():
+    c, q, windows, cubes = fixture()
+    design = build_design(q[:48], q[48:], windows, cubes, c, noise_threshold=1e-8)
+    catalog = _all_candidates(design, c)
+    assert catalog['MI3'][0] == ['A', 'F', 'I']
+    assert catalog['MRPerm3:0'][0] == ['A', 'F', 'RP:0']
+    assert catalog['MRPerm:0'][0][-1] == catalog['MRPerm3:0'][0][-1]
+    assert catalog['MI3'][1] == catalog['M2'][1] == catalog['MRPerm3:0'][1]
 
 
 def test_linear_teacher_turns_off_residual_without_stopping_additive_comparison():

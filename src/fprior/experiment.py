@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import time
 import numpy as np
-from .baselines import elasticnet_grid, gbrt_grid, fit_baseline
+from .baselines import elasticnet_grid, gbrt_grid, fit_baseline, fit_elasticnet_path
 from .io import finite_array
 from .solver import simplex_grid, solve_weight, select_configuration
 
@@ -40,7 +40,7 @@ def equal_budget_weights(config, *, active=None):
 
 def _all_candidates(design, config):
     mandatory = {'M0', 'EN', 'MD', 'MP', 'M1', 'M2', 'MU', 'MW', 'MWG',
-                 'MHap', 'MLocal', 'FU', 'FU-GBRT', 'MI', 'MRPerm'}
+                 'MHap', 'MLocal', 'FU', 'FU-GBRT', 'MI', 'MRPerm', 'MI3', 'MRPerm3'}
     if set(config['models']['families']) != mandatory:
         raise ValueError('MODEL_COMPARISON_CATALOG_INCOMPLETE')
     families = {name: (list(names), ridge_candidates(names, config,
@@ -62,6 +62,24 @@ def _evaluate_design(design, y, candidates, config, *, selected=None):
     for family, (names, grid) in candidates.items():
         records = []; elapsed = time.perf_counter()
         indices = range(len(grid)) if selected is None else [selected[family]['config_index']]
+        if family == 'EN':
+            # Outer refits follow the same path through stronger regularization,
+            # using outer training responses only. Never warm-start across folds.
+            path = grid if selected is None else [p for p in grid
+                if p['l1_ratio'] == grid[indices[0]]['l1_ratio']
+                and p['alpha_ratio'] >= grid[indices[0]]['alpha_ratio']]
+            fits = fit_elasticnet_path(design.features[names][0], y, path,
+                                      config['baselines']['elasticnet'], seed=config['seed'])
+            by_parameter = {(p['l1_ratio'], p['alpha_ratio']): fit for p, fit in zip(path, fits)}
+            for index in indices:
+                p = grid[index]; fit = by_parameter[(p['l1_ratio'], p['alpha_ratio'])]
+                records.append({'predictions': fit.predict(design.features[names][1]),
+                                'diagnostics': fit.diagnostics})
+            result[family] = records
+            diagnostics[family] = {'seconds': time.perf_counter()-elapsed,
+                                  'candidate_count': len(grid), 'path_fits': len(path),
+                                  'fits': [fit.diagnostics for fit in fits]}
+            continue
         for index in indices:
             parameter = grid[index]
             if family in ('EN', 'FU-GBRT'):

@@ -1,7 +1,7 @@
 # SoyBase 实验参数；正式预测仍须通过 Study 观测核查与合成功效验收。
 # 所有相对路径均以 fprior/ 为基准。
 schema_version = 2
-experiment_version = "soybase_official_funcprior_v4"
+experiment_version = "soybase_official_funcprior_v5"
 seed = 20261010
 # 根据本地覆盖及连续组成性状的适配性预先指定，未使用预测分数选性状。
 primary_trait_id = "protein"
@@ -124,6 +124,8 @@ l1_ratio = [0.1, 0.5, 0.9, 1.0]
 alpha_max_ratios = [1.0, 0.1, 0.01, 0.001, 0.0001]
 max_iter = 100000
 tol = 1.0e-6
+coordinate_warm_steps = 32
+lasso_optimizer = "working_set_with_full_dual_gap_check"
 
 [baselines.gbrt]
 loss = "squared_error"
@@ -146,7 +148,7 @@ interaction_missing_rule = "raw_zero_with_identical_R_validity_mask"
 interaction_basis = "all_haplotype_ALT_cooccurrences_of_order_at_least_two"
 
 [models]
-families = ["M0", "EN", "MD", "MP", "M1", "M2", "MU", "MW", "MWG", "MHap", "MLocal", "FU", "FU-GBRT", "MI", "MRPerm"]
+families = ["M0", "EN", "MD", "MP", "M1", "M2", "MU", "MW", "MWG", "MHap", "MLocal", "FU", "FU-GBRT", "MI", "MRPerm", "MI3", "MRPerm3"]
 primary_budget_only = true
 
 [execution]
@@ -163,7 +165,7 @@ max_host_ram_fraction = 0.70
 
 # 补充协议只定义训练前要求；配置填写不代表已实现或验收通过。
 [pretraining]
-protocol_version = "soybase_v4_pretraining_v1"
+protocol_version = "soybase_v5_pretraining_v1"
 require_artifact_verification = true
 allow_source_unavailable_exploration = false
 allow_power_limited_exploration = false
@@ -187,6 +189,7 @@ precision_rule = "half_unit_in_last_published_decimal_place"
 tolerance_rule = "sum_old_and_new_equal_study_propagated_rounding_bounds_plus_float64_roundoff"
 float64_roundoff_multiplier = 32
 require_old_and_new_precision_provenance = true
+require_historical_precision_before_pilot = true
 precision_missing = "STOP_WITHOUT_AGGREGATION_ACCEPTANCE"
 source_drift_status = "SOURCE_VERSION_DRIFT"
 unavailable_status = "STUDY_AUDIT_UNAVAILABLE"
@@ -253,7 +256,7 @@ additive_reference = "inner_selected_M0_or_EN"
 first_order_model = "M1"
 first_order_controls = ["MD", "MP"]
 residual_model = "M2"
-residual_controls = ["M1", "MU", "MW", "MWG", "MHap", "MLocal", "MI", "MRPerm"]
+residual_controls = ["M1", "MU", "MW", "MWG", "MHap", "MLocal", "MI", "MRPerm", "MI3", "MRPerm3"]
 matched_control_rule = "strictly_lower_pooled_MSE_than_each_registered_control_repeat"
 require_complete_comparisons = true
 require_complete_coverage_consistency = true
